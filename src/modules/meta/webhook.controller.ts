@@ -72,23 +72,34 @@ export class WebhookController {
     return { received: true };
   }
 
-  /** Valida X-Hub-Signature-256 com o app secret (quando configurado). */
+  /** Valida X-Hub-Signature-256 com os app secrets configurados. */
   private assertSignature(rawBody: Buffer | undefined, signature?: string) {
-    const secret = process.env.META_APP_SECRET;
-    if (!secret) return; // app ainda não configurado: pula validação em dev
+    const secrets = [
+      process.env.META_APP_SECRET,
+      process.env.META_INSTAGRAM_APP_SECRET,
+    ].filter((secret, index, arr): secret is string =>
+      Boolean(secret && arr.indexOf(secret) === index),
+    );
+    if (!secrets.length) return; // app ainda não configurado: pula validação em dev
     if (!rawBody || !signature) {
       this.logger.warn(
         `Webhook sem assinatura verificável: rawBody=${rawBody ? rawBody.length : 0}, signature=${signature ? 'presente' : 'ausente'}`,
       );
       throw new BadRequestException('Assinatura ausente');
     }
-    const expected =
-      'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
-    const a = Buffer.from(expected);
+
     const b = Buffer.from(signature);
-    if (a.length !== b.length || !timingSafeEqual(a, b)) {
-      throw new ForbiddenException('Assinatura inválida');
+    for (const secret of secrets) {
+      const expected =
+        'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex');
+      const a = Buffer.from(expected);
+      if (a.length === b.length && timingSafeEqual(a, b)) return;
     }
+
+    this.logger.warn(
+      `Assinatura inválida no webhook: rawBody=${rawBody.length}, signature=${signature.slice(0, 16)}..., secrets=${secrets.length}`,
+    );
+    throw new ForbiddenException('Assinatura inválida');
   }
 
   /** Normaliza o payload da Meta em eventos internos. */
