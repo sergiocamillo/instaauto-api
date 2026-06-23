@@ -6,6 +6,7 @@ import { AppController } from './app.controller';
 import { ConnectedAccountGuard } from './common/guards/connected-account.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PrismaModule } from './modules/prisma/prisma.module';
+import { StorageModule } from './modules/storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
 import { AutomationsModule } from './modules/automations/automations.module';
@@ -20,6 +21,7 @@ import { MetaModule } from './modules/meta/meta.module';
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     PrismaModule,
+    StorageModule,
     AuthModule,
     AccountsModule,
     AutomationsModule,

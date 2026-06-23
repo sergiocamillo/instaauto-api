@@ -20,6 +20,7 @@ export interface IncomingEvent {
   text: string;
   kind: 'comment' | 'message' | 'story_reply';
   mediaRef?: string; // id/permalink da mídia para gatilhos "specific"
+  commentId?: string; // id do comentário, para responder publicamente
 }
 
 type AutomationFull = Automation & {
@@ -176,6 +177,31 @@ export class AutomationEngineService {
             account,
             text || 'Segue seu material.',
           );
+          break;
+        }
+
+        case ActionType.reply_comment: {
+          // Responde publicamente ao comentário (só faz sentido em gatilhos
+          // de comentário, onde há commentId).
+          if (!event.commentId || !account.accessToken) break;
+          const id = await ensureContact();
+          const text =
+            cfg.comment_reply || cfg.message || 'Obrigado pelo comentário! 🙌';
+          const res = await this.graph.replyToComment({
+            commentId: event.commentId,
+            accessToken: account.accessToken,
+            message: text,
+          });
+          await this.prisma.message.create({
+            data: {
+              userId,
+              contactId: id,
+              automationId: automation.id,
+              body: `[resposta ao comentário] ${text}`,
+              status: res.ok ? MessageStatus.delivered : MessageStatus.failed,
+            },
+          });
+          if (res.ok) await this.logEvent(userId, AnalyticsEventType.message_sent);
           break;
         }
       }

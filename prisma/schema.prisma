@@ -111,6 +111,7 @@ enum ActionType {
   save_contact
   add_tag
   reply_with_button
+  reply_comment
 }
 
 enum AutomationStatus {

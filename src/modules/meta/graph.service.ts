@@ -355,4 +355,26 @@ export class GraphService {
       return { ok: false, error: message };
     }
   }
+
+  /** Responde publicamente a um comentário (POST /{comment-id}/replies). */
+  async replyToComment(params: {
+    commentId: string;
+    accessToken: string;
+    message: string;
+  }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await axios.post(
+        `${FB_GRAPH}/${params.commentId}/replies`,
+        { message: params.message },
+        { params: { access_token: params.accessToken } },
+      );
+      return { ok: true };
+    } catch (err) {
+      const message = axios.isAxiosError(err)
+        ? JSON.stringify(err.response?.data ?? err.message)
+        : String(err);
+      this.logger.error(`Falha ao responder comentário: ${message}`);
+      return { ok: false, error: message };
+    }
+  }
 }

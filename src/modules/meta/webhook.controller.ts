@@ -52,7 +52,11 @@ export class WebhookController {
     this.assertSignature(req.rawBody, signature);
 
     const body = req.body as MetaWebhookBody;
+    // Loga o payload bruto — essencial para depurar o que a Meta envia
+    // (estrutura varia entre Instagram Login e Facebook Page).
+    this.logger.log(`Webhook recebido: ${JSON.stringify(body)}`);
     const events = this.parse(body);
+    this.logger.log(`Eventos normalizados: ${events.length}`);
 
     // Processa cada evento; erros são logados sem derrubar a resposta.
     for (const event of events) {
@@ -100,6 +104,7 @@ export class WebhookController {
             text: change.value.text ?? '',
             kind: 'comment',
             mediaRef: change.value.media?.id ?? change.value.media?.permalink,
+            commentId: change.value.id,
           });
         }
       }
@@ -127,6 +132,7 @@ interface MetaWebhookBody {
     changes?: Array<{
       field: string;
       value?: {
+        id?: string;
         text?: string;
         from?: { id?: string; username?: string };
         media?: { id?: string; permalink?: string };

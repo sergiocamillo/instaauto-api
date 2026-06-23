@@ -1,4 +1,12 @@
-import { Controller, Get, Logger, Param, Post, Query, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service';
@@ -74,7 +82,9 @@ export class AccountsController {
       // seguro ao frontend para exibição.
       this.logger.error(`Falha no callback OAuth (${provider}): ${reason}`);
       const summary = encodeURIComponent(reason.slice(0, 180));
-      return res.redirect(`${frontend}/configuracoes?error=1&reason=${summary}`);
+      return res.redirect(
+        `${frontend}/configuracoes?error=1&reason=${summary}`,
+      );
     }
   }
 }
