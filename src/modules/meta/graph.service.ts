@@ -56,15 +56,18 @@ export class GraphService {
   private get instagramAppSecret() {
     return process.env.META_INSTAGRAM_APP_SECRET ?? this.appSecret;
   }
-  /** Redirect base; cada provider usa um sufixo distinto para diferenciar. */
+  /**
+   * Redirect URI por provider. Construído como string literal determinística
+   * (sem new URL()/searchParams, que podem normalizar/re-encodar) para garantir
+   * que o valor seja IDÊNTICO byte a byte na autorização e na troca do code —
+   * a Meta rejeita qualquer divergência ("redirect_uri is identical").
+   */
   private redirectUri(provider: MetaProvider) {
-    const base =
+    const base = (
       process.env.META_OAUTH_REDIRECT_URI ??
-      'http://localhost:3001/api/accounts/callback';
-    // Acrescenta ?provider= para o callback saber qual fluxo finalizar.
-    const url = new URL(base);
-    url.searchParams.set('provider', provider);
-    return url.toString();
+      'http://localhost:3001/api/accounts/callback'
+    ).replace(/\/$/, '');
+    return `${base}?provider=${provider}`;
   }
 
   /* --------------------------- Auth URLs ---------------------------- */
