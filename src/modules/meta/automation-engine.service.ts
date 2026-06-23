@@ -33,6 +33,8 @@ type AutomationFull = Automation & {
   actions: AutomationAction[];
 };
 
+type MatchResult = { ok: true } | { ok: false; reason: string };
+
 const COMMENT_TRIGGERS: TriggerType[] = [
   TriggerType.reel_comment_specific,
   TriggerType.reel_comment_any,
@@ -84,11 +86,24 @@ export class AutomationEngineService {
       include: { trigger: true, actions: { orderBy: { order: 'asc' } } },
     })) as AutomationFull[];
 
-    const matched = automations.filter((a) => this.matches(a, event));
+    const evaluations = automations.map((automation) => ({
+      automation,
+      result: this.matchResult(automation, event),
+    }));
+    const matched = evaluations
+      .filter((item) => item.result.ok)
+      .map((item) => item.automation);
     if (!matched.length) {
       this.logger.log(
         `Nenhuma automação casou com ${event.kind}; ativas=${automations.length}`,
       );
+      for (const item of evaluations) {
+        if (!item.result.ok) {
+          this.logger.log(
+            `Sem match "${item.automation.name}": ${item.result.reason}`,
+          );
+        }
+      }
       return;
     }
     this.logger.log(
@@ -109,8 +124,12 @@ export class AutomationEngineService {
 
   /** Casa o gatilho + palavra-chave com o evento. */
   private matches(a: AutomationFull, event: IncomingEvent): boolean {
+    return this.matchResult(a, event).ok;
+  }
+
+  private matchResult(a: AutomationFull, event: IncomingEvent): MatchResult {
     const trigger = a.trigger;
-    if (!trigger) return false;
+    if (!trigger) return { ok: false, reason: 'sem trigger' };
 
     const kindOk =
       (event.kind === 'comment' && COMMENT_TRIGGERS.includes(trigger.type)) ||
@@ -119,22 +138,50 @@ export class AutomationEngineService {
       (event.kind === 'message' &&
         (trigger.type === TriggerType.dm_new ||
           trigger.type === TriggerType.dm_keyword));
-    if (!kindOk) return false;
+    if (!kindOk) {
+      return {
+        ok: false,
+        reason: `tipo não casa: event=${event.kind}, trigger=${trigger.type}`,
+      };
+    }
 
     // Gatilhos "specific" exigem casar a mídia alvo.
     const isSpecific =
       trigger.type === TriggerType.reel_comment_specific ||
       trigger.type === TriggerType.post_comment_specific;
-    if (isSpecific && trigger.targetRef && event.mediaRef) {
-      if (!event.mediaRef.includes(trigger.targetRef)) return false;
+    if (isSpecific && trigger.targetRef) {
+      if (!event.mediaRef) {
+        return {
+          ok: false,
+          reason: `mídia específica sem mediaRef no evento; target=${trigger.targetRef}`,
+        };
+      }
+
+      const targetRef = trigger.targetRef;
+      const targetMatchesEvent =
+        event.mediaRef.includes(targetRef) || targetRef.includes(event.mediaRef);
+      if (!targetMatchesEvent) {
+        return {
+          ok: false,
+          reason: `mídia não casa: event=${event.mediaRef}, target=${targetRef}`,
+        };
+      }
     }
 
     // Palavra-chave.
     if (trigger.keywordMatch === KeywordMatch.specific) {
       const haystack = event.text.toUpperCase();
-      return trigger.keywords.some((k) => haystack.includes(k.toUpperCase()));
+      const matchedKeyword = trigger.keywords.find((k) =>
+        haystack.includes(k.toUpperCase()),
+      );
+      if (!matchedKeyword) {
+        return {
+          ok: false,
+          reason: `palavra-chave não encontrada: keywords=${trigger.keywords.join(', ')}, text="${event.text}"`,
+        };
+      }
     }
-    return true;
+    return { ok: true };
   }
 
   private async runActions(
