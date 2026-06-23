@@ -33,6 +33,32 @@ function graphBaseForToken(accessToken: string) {
   return accessToken.startsWith('IG') ? IG_GRAPH : FB_GRAPH;
 }
 
+function metaErrorMessage(err: unknown) {
+  if (!axios.isAxiosError(err)) return String(err);
+  const data = err.response?.data as
+    | {
+        error?: {
+          message?: string;
+          error_user_msg?: string;
+          code?: number;
+          subcode?: number;
+          type?: string;
+        };
+      }
+    | string
+    | undefined;
+  if (typeof data === 'object' && data?.error) {
+    const error = data.error;
+    return JSON.stringify({
+      message: error.error_user_msg ?? error.message,
+      code: error.code,
+      subcode: error.subcode,
+      type: error.type,
+    });
+  }
+  return JSON.stringify(data ?? err.message);
+}
+
 /**
  * Cliente da Meta Graph API. Todas as chamadas são server-side.
  *
@@ -383,9 +409,7 @@ export class GraphService {
       );
       return { ok: true };
     } catch (err) {
-      const message = axios.isAxiosError(err)
-        ? JSON.stringify(err.response?.data ?? err.message)
-        : String(err);
+      const message = metaErrorMessage(err);
       this.logger.error(`Falha ao enviar DM: ${message}`);
       return { ok: false, error: message };
     }
@@ -405,9 +429,7 @@ export class GraphService {
       );
       return { ok: true };
     } catch (err) {
-      const message = axios.isAxiosError(err)
-        ? JSON.stringify(err.response?.data ?? err.message)
-        : String(err);
+      const message = metaErrorMessage(err);
       this.logger.error(`Falha ao responder comentário: ${message}`);
       return { ok: false, error: message };
     }

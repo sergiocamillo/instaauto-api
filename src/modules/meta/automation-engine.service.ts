@@ -123,6 +123,11 @@ export class AutomationEngineService {
     this.logger.log(
       `${matched.length} automação(ões) casaram: ${matched.map((a) => a.name).join(', ')}`,
     );
+    for (const automation of matched) {
+      this.logger.log(
+        `Ações de "${automation.name}": ${automation.actions.map((a) => a.type).join(', ') || 'nenhuma'}`,
+      );
+    }
 
     for (const automation of matched) {
       await this.runActions(account.userId, automation, event, {
@@ -264,6 +269,7 @@ export class AutomationEngineService {
 
     for (const action of automation.actions) {
       const cfg = (action.config ?? {}) as Record<string, string>;
+      this.logger.log(`Executando ação ${action.type} em "${automation.name}"`);
 
       switch (action.type) {
         case ActionType.save_contact:
@@ -357,10 +363,12 @@ export class AutomationEngineService {
     text: string,
   ) {
     let status: MessageStatus = MessageStatus.sent;
+    let error: string | undefined;
 
     if (account.accessToken) {
       if (!event.senderId && !event.commentId) {
         status = MessageStatus.failed;
+        error = 'Evento sem senderId/commentId';
         this.logger.warn(
           `Evento ${event.kind} sem senderId/commentId; DM não enviada`,
         );
@@ -373,6 +381,7 @@ export class AutomationEngineService {
           text,
         });
         status = res.ok ? MessageStatus.delivered : MessageStatus.failed;
+        error = res.error;
         if (!res.ok) {
           this.logger.warn(
             `Falha ao enviar DM na automação ${automation.name}: ${res.error ?? 'sem detalhe'}`,
@@ -389,7 +398,10 @@ export class AutomationEngineService {
         userId,
         contactId,
         automationId: automation.id,
-        body: text,
+        body:
+          status === MessageStatus.failed && error
+            ? `${text}\n\n[erro Meta] ${error}`
+            : text,
         status,
       },
     });
