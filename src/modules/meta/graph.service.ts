@@ -81,13 +81,15 @@ export class GraphService {
   }
 
   private buildFacebookAuthUrl(state: string): string {
+    // Escopos mínimos para ler o IG business account vinculado à Página e
+    // gerenciar comentários/DMs. pages_manage_metadata NÃO é usado (webhooks
+    // são assinados pelo painel da Meta) e quebra o login se não aprovado.
     const scope = [
       'instagram_basic',
       'instagram_manage_comments',
       'instagram_manage_messages',
       'pages_show_list',
       'pages_read_engagement',
-      'pages_manage_metadata',
     ].join(',');
     const params = new URLSearchParams({
       client_id: this.appId,

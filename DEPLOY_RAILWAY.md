@@ -117,8 +117,7 @@ E defina `META_OAUTH_REDIRECT_URI=https://<backend>.up.railway.app/api/accounts/
 - **Instagram Login**: `instagram_business_basic`,
   `instagram_business_manage_messages`, `instagram_business_manage_comments`
 - **Facebook Login**: `instagram_basic`, `instagram_manage_comments`,
-  `instagram_manage_messages`, `pages_show_list`, `pages_read_engagement`,
-  `pages_manage_metadata`
+  `instagram_manage_messages`, `pages_show_list`, `pages_read_engagement`
 
 Em **Development Mode** você já consegue testar com a sua própria conta (papel
 de admin/dev no app). Para uso com terceiros, é preciso passar pelo App Review.
