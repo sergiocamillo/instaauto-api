@@ -4,6 +4,7 @@ import axios from 'axios';
 const VERSION = process.env.META_GRAPH_VERSION ?? 'v22.0';
 const FB_GRAPH = `https://graph.facebook.com/${VERSION}`;
 const IG_GRAPH = `https://graph.instagram.com/${VERSION}`;
+const FACEBOOK_OAUTH_HEADERS = { Accept: 'application/json' };
 
 /** Provedor de login escolhido pelo usuário. */
 export type MetaProvider = 'instagram' | 'facebook';
@@ -56,18 +57,21 @@ export class GraphService {
   private get instagramAppSecret() {
     return process.env.META_INSTAGRAM_APP_SECRET ?? this.appSecret;
   }
-  /**
-   * Redirect URI por provider. Construído como string literal determinística
-   * (sem new URL()/searchParams, que podem normalizar/re-encodar) para garantir
-   * que o valor seja IDÊNTICO byte a byte na autorização e na troca do code —
-   * a Meta rejeita qualquer divergência ("redirect_uri is identical").
-   */
-  private redirectUri(provider: MetaProvider) {
+  /** Redirect URI usado na autorização e na troca do code. */
+  private redirectUri() {
     const base = (
       process.env.META_OAUTH_REDIRECT_URI ??
       'http://localhost:3001/api/accounts/callback'
     ).replace(/\/$/, '');
-    return `${base}?provider=${provider}`;
+    const [url, query] = base.split('?');
+    if (!query) return url;
+
+    // Compatibilidade: se o env antigo tinha ?provider=..., remove daqui.
+    // O provider agora vem no OAuth state, evitando mismatch por query string.
+    const params = new URLSearchParams(query);
+    params.delete('provider');
+    const normalizedQuery = params.toString();
+    return normalizedQuery ? `${url}?${normalizedQuery}` : url;
   }
 
   /* --------------------------- Auth URLs ---------------------------- */
@@ -86,7 +90,7 @@ export class GraphService {
     ].join(',');
     const params = new URLSearchParams({
       client_id: this.instagramAppId,
-      redirect_uri: this.redirectUri('instagram'),
+      redirect_uri: this.redirectUri(),
       scope,
       response_type: 'code',
       state,
@@ -109,7 +113,7 @@ export class GraphService {
     ].join(',');
     const params = new URLSearchParams({
       client_id: this.appId,
-      redirect_uri: this.redirectUri('facebook'),
+      redirect_uri: this.redirectUri(),
       scope,
       response_type: 'code',
       state,
@@ -130,11 +134,31 @@ export class GraphService {
     } catch (err) {
       // Expõe o corpo de erro da Meta (motivo real) na mensagem lançada.
       if (axios.isAxiosError(err)) {
-        const body = JSON.stringify(err.response?.data ?? err.message);
+        const body = this.formatAxiosError(err);
         throw new Error(`Meta API (${provider}): ${body}`);
       }
       throw err;
     }
+  }
+
+  private formatAxiosError(err: unknown): string {
+    if (!axios.isAxiosError(err)) return String(err);
+
+    const status = err.response?.status;
+    const contentType = err.response?.headers['content-type'];
+    const data = err.response?.data;
+    if (typeof data === 'string') {
+      const title = data.match(/<title>(.*?)<\/title>/i)?.[1];
+      const heading = data.match(/<h1[^>]*>(.*?)<\/h1>/i)?.[1];
+      const clean = (title ?? heading ?? data)
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 300);
+      return JSON.stringify({ status, contentType, message: clean });
+    }
+
+    return JSON.stringify(data ?? err.message);
   }
 
   /** Instagram Login: short → long-lived token, depois identidade. */
@@ -145,7 +169,7 @@ export class GraphService {
         client_id: this.instagramAppId,
         client_secret: this.instagramAppSecret,
         grant_type: 'authorization_code',
-        redirect_uri: this.redirectUri('instagram'),
+        redirect_uri: this.redirectUri(),
         code,
       }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
@@ -188,9 +212,10 @@ export class GraphService {
         params: {
           client_id: this.appId,
           client_secret: this.appSecret,
-          redirect_uri: this.redirectUri('facebook'),
+          redirect_uri: this.redirectUri(),
           code,
         },
+        headers: FACEBOOK_OAUTH_HEADERS,
       },
     );
 
@@ -205,6 +230,7 @@ export class GraphService {
         client_secret: this.appSecret,
         fb_exchange_token: shortRes.data.access_token,
       },
+      headers: FACEBOOK_OAUTH_HEADERS,
     });
     const userToken = longRes.data.access_token;
 

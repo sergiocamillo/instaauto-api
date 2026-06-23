@@ -93,18 +93,17 @@ O InstaAuto suporta **dois** fluxos (o usuário escolhe na tela Configurações)
 | **Instagram Login** | Conta Creator/Business **sem** Página do Facebook | *Instagram → Instagram Login* (API com mensagens) |
 | **Facebook Login** | Conta Business **com** Página vinculada | *Facebook Login for Business* |
 
-### 4.3 Redirect URIs (cadastre AS DUAS variantes)
+### 4.3 Redirect URI
 
-O backend acrescenta `?provider=` ao callback. Cadastre ambas como **Valid OAuth
-Redirect URIs** (em cada produto correspondente):
+Cadastre esta URL como **Valid OAuth Redirect URI** nos produtos de login usados
+no app Meta:
 
 ```
-https://<backend>.up.railway.app/api/accounts/callback?provider=instagram
-https://<backend>.up.railway.app/api/accounts/callback?provider=facebook
+https://<backend>.up.railway.app/api/accounts/callback
 ```
 
-E defina `META_OAUTH_REDIRECT_URI=https://<backend>.up.railway.app/api/accounts/callback`
-(sem o `?provider`, que é adicionado pelo código).
+E defina `META_OAUTH_REDIRECT_URI` com o mesmo valor. O provider viaja no
+parâmetro OAuth `state`, não na query do callback.
 
 ### 4.4 Webhooks
 

@@ -52,13 +52,19 @@ export class AccountsService {
   }
 
   /** Callback do OAuth: troca code, cifra token e persiste a conta. */
-  async handleCallback(provider: MetaProvider, code: string, state: string) {
+  async handleCallback(
+    code: string,
+    state: string,
+    fallbackProvider?: MetaProvider,
+  ) {
     let userId: string;
+    let provider: MetaProvider;
     try {
       const decoded = JSON.parse(
         Buffer.from(state, 'base64url').toString(),
-      ) as { userId?: string };
+      ) as { userId?: string; provider?: MetaProvider };
       if (!decoded.userId) throw new Error('sem userId');
+      provider = decoded.provider ?? fallbackProvider ?? 'instagram';
       userId = decoded.userId;
     } catch {
       throw new Error('State inválido');

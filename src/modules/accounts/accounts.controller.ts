@@ -22,6 +22,11 @@ function normalizeProvider(value?: string): MetaProvider {
   return value === 'facebook' ? 'facebook' : 'instagram';
 }
 
+function parseProvider(value?: string): MetaProvider | undefined {
+  if (value === 'facebook' || value === 'instagram') return value;
+  return undefined;
+}
+
 @ApiTags('accounts')
 @Controller('accounts')
 export class AccountsController {
@@ -58,7 +63,7 @@ export class AccountsController {
 
   /**
    * Callback público chamado pela Meta após o consentimento.
-   * O provider vem no query (definido no redirect_uri de cada fluxo).
+   * O provider vem no state. O query é aceito apenas para callbacks antigos.
    */
   @Public()
   @Get('callback')
@@ -70,17 +75,15 @@ export class AccountsController {
   ) {
     const frontend = process.env.FRONTEND_URL ?? 'http://localhost:5173';
     try {
-      await this.service.handleCallback(
-        normalizeProvider(provider),
-        code,
-        state,
-      );
+      await this.service.handleCallback(code, state, parseProvider(provider));
       return res.redirect(`${frontend}/configuracoes?connected=1`);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       // Loga a causa real (visível nos logs do Railway) e repassa um resumo
       // seguro ao frontend para exibição.
-      this.logger.error(`Falha no callback OAuth (${provider}): ${reason}`);
+      this.logger.error(
+        `Falha no callback OAuth (${provider ?? 'state'}): ${reason}`,
+      );
       const summary = encodeURIComponent(reason.slice(0, 180));
       return res.redirect(
         `${frontend}/configuracoes?error=1&reason=${summary}`,
