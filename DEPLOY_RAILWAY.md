@@ -25,7 +25,8 @@ Guia para subir os **3 serviços** em um único projeto Railway:
 1. **+ New → GitHub Repo** (ou **Empty Service** + `railway up` da pasta
    `instaauto-be`). Defina o **Root Directory** como `instaauto-be` se o repo
    for um monorepo.
-2. O Railway detecta o `nixpacks.toml` automaticamente.
+2. Builder: **Railpack** (padrão atual do Railway). O `railpack.json` do projeto
+   já fixa **Node 22** e os passos de build/start — não use Nixpacks (depreciado).
 3. Em **Variables**, configure (ver `.env.example`):
 
    | Variável | Valor |
