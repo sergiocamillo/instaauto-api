@@ -101,6 +101,8 @@ export class GraphService {
       'instagram_manage_messages',
       'pages_show_list',
       'pages_read_engagement',
+      // Ajuda /me/accounts a retornar o instagram_business_account vinculado.
+      'business_management',
     ].join(',');
     const params = new URLSearchParams({
       client_id: this.appId,
@@ -204,24 +206,70 @@ export class GraphService {
     const userToken = longRes.data.access_token;
 
     // 3) Páginas + IG business account vinculado + page access token
-    const pagesRes = await axios.get<{
-      data: Array<{
-        id: string;
-        name: string;
-        access_token: string;
-        instagram_business_account?: { id: string };
-      }>;
-    }>(`${FB_GRAPH}/me/accounts`, {
-      params: {
-        fields: 'id,name,access_token,instagram_business_account',
-        access_token: userToken,
+    interface FbPage {
+      id: string;
+      name: string;
+      access_token: string;
+      instagram_business_account?: { id: string };
+    }
+    const pagesRes = await axios.get<{ data: FbPage[] }>(
+      `${FB_GRAPH}/me/accounts`,
+      {
+        params: {
+          fields: 'id,name,access_token,instagram_business_account',
+          access_token: userToken,
+        },
       },
-    });
+    );
 
-    const page = pagesRes.data.data.find((p) => p.instagram_business_account);
+    const pages = pagesRes.data.data ?? [];
+    this.logger.log(
+      `Facebook: ${pages.length} página(s) — ${pages
+        .map((p) => `${p.name}:${p.instagram_business_account?.id ?? 'sem-ig'}`)
+        .join(', ')}`,
+    );
+
+    if (pages.length === 0) {
+      throw new Error(
+        'Nenhuma Página do Facebook foi concedida. No consentimento, marque a Página e habilite a permissão de Páginas.',
+      );
+    }
+
+    // Tenta achar a Página com IG já no payload; senão consulta cada Página
+    // individualmente (em alguns casos o campo não vem em /me/accounts).
+    let page = pages.find((p) => p.instagram_business_account);
+    if (!page) {
+      for (const p of pages) {
+        try {
+          const detail = await axios.get<{
+            instagram_business_account?: { id: string };
+          }>(`${FB_GRAPH}/${p.id}`, {
+            params: {
+              fields: 'instagram_business_account',
+              access_token: p.access_token,
+            },
+          });
+          if (detail.data.instagram_business_account) {
+            page = {
+              ...p,
+              instagram_business_account:
+                detail.data.instagram_business_account,
+            };
+            break;
+          }
+        } catch {
+          /* ignora e tenta a próxima */
+        }
+      }
+    }
+
     if (!page?.instagram_business_account) {
       throw new Error(
-        'Nenhuma Página do Facebook com conta do Instagram vinculada foi encontrada.',
+        `Página(s) encontrada(s) mas sem Instagram Business vinculado: ${pages
+          .map((p) => p.name)
+          .join(
+            ', ',
+          )}. Vincule sua conta do Instagram (Profissional) à Página no app do Instagram → Configurações → Página, e tente de novo.`,
       );
     }
     const igUserId = page.instagram_business_account.id;
