@@ -29,6 +29,23 @@ export interface MediaItem {
   timestamp: string | null;
 }
 
+interface DebugTokenResponse {
+  data: {
+    app_id?: string;
+    type?: string;
+    application?: string;
+    expires_at?: number;
+    is_valid?: boolean;
+    issued_at?: number;
+    scopes?: string[];
+    granular_scopes?: Array<{
+      scope: string;
+      target_ids?: string[];
+    }>;
+    user_id?: string;
+  };
+}
+
 function graphBaseForToken(accessToken: string) {
   return accessToken.startsWith('IG') ? IG_GRAPH : FB_GRAPH;
 }
@@ -350,6 +367,34 @@ export class GraphService {
   }
 
   /* ----------------------------- Media ------------------------------ */
+
+  async debugToken(accessToken: string) {
+    const appAccessToken = `${this.appId}|${this.appSecret}`;
+    const res = await axios.get<DebugTokenResponse>(`${FB_GRAPH}/debug_token`, {
+      params: {
+        input_token: accessToken,
+        access_token: appAccessToken,
+      },
+    });
+
+    const data = res.data.data;
+    return {
+      appId: data.app_id,
+      type: data.type,
+      application: data.application,
+      expiresAt: data.expires_at
+        ? new Date(data.expires_at * 1000).toISOString()
+        : null,
+      isValid: data.is_valid,
+      issuedAt: data.issued_at
+        ? new Date(data.issued_at * 1000).toISOString()
+        : null,
+      scopes: data.scopes ?? [],
+      granularScopes: data.granular_scopes ?? [],
+      userId: data.user_id,
+      tokenKind: accessToken.startsWith('IG') ? 'instagram' : 'graph',
+    };
+  }
 
   /** Lista mídias da conta (feed). Stories exigem endpoint separado. */
   async listMedia(igUserId: string, accessToken: string): Promise<MediaItem[]> {

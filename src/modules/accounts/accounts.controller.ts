@@ -46,6 +46,12 @@ export class AccountsController {
     return this.service.listMedia(user.id);
   }
 
+  @Get('debug-token')
+  @ApiBearerAuth()
+  debugToken(@CurrentUser() user: AuthUser) {
+    return this.service.debugToken(user.id);
+  }
+
   @Post('connect')
   @ApiBearerAuth()
   connect(@CurrentUser() user: AuthUser, @Query('provider') provider?: string) {

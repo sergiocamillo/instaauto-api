@@ -24,6 +24,7 @@ export class AccountsService {
   async status(userId: string) {
     const accounts = await this.prisma.connectedAccount.findMany({
       where: { userId },
+      orderBy: [{ platform: 'asc' }, { updatedAt: 'desc' }],
     });
     return accounts.map((a) => ({
       id: a.id,
@@ -32,6 +33,27 @@ export class AccountsService {
       status: a.status,
       tokenExpiresAt: a.tokenExpiresAt,
     }));
+  }
+
+  async debugToken(userId: string) {
+    const accounts = await this.prisma.connectedAccount.findMany({
+      where: { userId, status: ConnectionStatus.connected },
+      orderBy: [{ platform: 'asc' }, { updatedAt: 'desc' }],
+    });
+    const account =
+      accounts.find((a) => a.platform === Platform.facebook) ?? accounts[0];
+    if (!account?.accessTokenEnc) {
+      throw new NotFoundException('Nenhuma conta conectada com token');
+    }
+
+    const token = decryptSecret(account.accessTokenEnc, this.key);
+    return {
+      platform: account.platform,
+      handle: account.handle,
+      igUserId: account.igUserId,
+      tokenKind: token.startsWith('IG') ? 'instagram' : 'graph',
+      debug: await this.graph.debugToken(token),
+    };
   }
 
   /** True se o usuário tem ao menos uma conta conectada (qualquer plataforma). */
