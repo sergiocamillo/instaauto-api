@@ -42,6 +42,10 @@ const COMMENT_TRIGGERS: TriggerType[] = [
   TriggerType.post_comment_any,
 ];
 
+function normalizeInstagramRef(value: string) {
+  return value.trim().replace(/\/$/, '');
+}
+
 @Injectable()
 export class AutomationEngineService {
   private readonly logger = new Logger(AutomationEngineService.name);
@@ -86,6 +90,16 @@ export class AutomationEngineService {
       include: { trigger: true, actions: { orderBy: { order: 'asc' } } },
     })) as AutomationFull[];
 
+    const token = account.accessTokenEnc
+      ? decryptSecret(account.accessTokenEnc, this.key)
+      : null;
+    await this.repairLegacyMediaTargets(
+      automations,
+      event,
+      account.igUserId!,
+      token,
+    );
+
     const evaluations = automations.map((automation) => ({
       automation,
       result: this.matchResult(automation, event),
@@ -109,10 +123,6 @@ export class AutomationEngineService {
     this.logger.log(
       `${matched.length} automação(ões) casaram: ${matched.map((a) => a.name).join(', ')}`,
     );
-
-    const token = account.accessTokenEnc
-      ? decryptSecret(account.accessTokenEnc, this.key)
-      : null;
 
     for (const automation of matched) {
       await this.runActions(account.userId, automation, event, {
@@ -159,7 +169,8 @@ export class AutomationEngineService {
 
       const targetRef = trigger.targetRef;
       const targetMatchesEvent =
-        event.mediaRef.includes(targetRef) || targetRef.includes(event.mediaRef);
+        event.mediaRef.includes(targetRef) ||
+        targetRef.includes(event.mediaRef);
       if (!targetMatchesEvent) {
         return {
           ok: false,
@@ -182,6 +193,50 @@ export class AutomationEngineService {
       }
     }
     return { ok: true };
+  }
+
+  private async repairLegacyMediaTargets(
+    automations: AutomationFull[],
+    event: IncomingEvent,
+    igUserId: string,
+    accessToken: string | null,
+  ) {
+    if (event.kind !== 'comment' || !event.mediaRef || !accessToken) return;
+
+    const legacyTargets = automations.filter((automation) => {
+      const trigger = automation.trigger;
+      if (!trigger?.targetRef) return false;
+      const isSpecific =
+        trigger.type === TriggerType.reel_comment_specific ||
+        trigger.type === TriggerType.post_comment_specific;
+      return isSpecific && /^https?:\/\//i.test(trigger.targetRef);
+    });
+    if (!legacyTargets.length) return;
+
+    try {
+      const media = await this.graph.listMedia(igUserId, accessToken);
+      const eventMedia = media.find((item) => item.id === event.mediaRef);
+      if (!eventMedia?.permalink) return;
+
+      const eventPermalink = normalizeInstagramRef(eventMedia.permalink);
+      for (const automation of legacyTargets) {
+        const target = normalizeInstagramRef(automation.trigger!.targetRef!);
+        if (target !== eventPermalink) continue;
+
+        await this.prisma.automationTrigger.update({
+          where: { automationId: automation.id },
+          data: { targetRef: event.mediaRef },
+        });
+        automation.trigger!.targetRef = event.mediaRef;
+        this.logger.log(
+          `Target antigo corrigido em "${automation.name}": ${target} -> ${event.mediaRef}`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Não foi possível corrigir targetRef legado: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async runActions(
