@@ -8,9 +8,14 @@ import {
   AnalyticsEventType,
   KeywordMatch,
   MessageStatus,
+  Platform,
   TriggerType,
 } from '@generated/prisma/enums';
-import type { Automation, AutomationAction } from '@generated/prisma';
+import type {
+  Automation,
+  AutomationAction,
+  ConnectedAccount,
+} from '@generated/prisma';
 
 /** Evento normalizado vindo do webhook (comentário ou DM). */
 export interface IncomingEvent {
@@ -46,6 +51,14 @@ function normalizeInstagramRef(value: string) {
   return value.trim().replace(/\/$/, '');
 }
 
+function preferredAccount(accounts: ConnectedAccount[]) {
+  return (
+    accounts.find((account) => account.platform === Platform.facebook) ??
+    accounts[0] ??
+    null
+  );
+}
+
 @Injectable()
 export class AutomationEngineService {
   private readonly logger = new Logger(AutomationEngineService.name);
@@ -65,9 +78,10 @@ export class AutomationEngineService {
       `Processando evento ${event.kind} para ${event.igUserId}: "${event.text.slice(0, 80)}"`,
     );
 
-    let account = await this.prisma.connectedAccount.findFirst({
+    const matchingAccounts = await this.prisma.connectedAccount.findMany({
       where: { igUserId: event.igUserId, status: 'connected' },
     });
+    let account = preferredAccount(matchingAccounts);
     if (!account) {
       const connectedAccounts = await this.prisma.connectedAccount.findMany({
         where: { status: 'connected' },
@@ -93,6 +107,9 @@ export class AutomationEngineService {
     const token = account.accessTokenEnc
       ? decryptSecret(account.accessTokenEnc, this.key)
       : null;
+    this.logger.log(
+      `Conta escolhida: platform=${account.platform}, igUserId=${account.igUserId}, token=${token?.startsWith('IG') ? 'instagram' : token ? 'graph' : 'none'}`,
+    );
     await this.repairLegacyMediaTargets(
       automations,
       event,

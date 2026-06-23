@@ -91,6 +91,19 @@ export class AccountsService {
       update: data,
     });
 
+    await this.prisma.connectedAccount.updateMany({
+      where: {
+        userId,
+        igUserId: identity.igUserId,
+        platform: { not: platform },
+      },
+      data: {
+        accessTokenEnc: null,
+        tokenExpiresAt: null,
+        status: ConnectionStatus.disconnected,
+      },
+    });
+
     this.logger.log(
       `Conta @${identity.username} conectada via ${provider} (user ${userId})`,
     );
