@@ -1,0 +1,274 @@
+// InstaAuto — schema Prisma
+//
+// Sistema pessoal (single-user). Não há multi-tenant/workspaces: cada registro
+// pertence a um User e toda query da aplicação filtra por userId (isolamento
+// equivalente a RLS, feito na camada de serviço).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ----------------------------------------------------------------------------
+// Auth
+// ----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String?
+  name         String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens     RefreshToken[]
+  connectedAccounts ConnectedAccount[]
+  automations       Automation[]
+  contacts          Contact[]
+  messages          Message[]
+  files             File[]
+  tags              Tag[]
+  analyticsEvents   AnalyticsEvent[]
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ----------------------------------------------------------------------------
+// Contas conectadas (Meta)
+// ----------------------------------------------------------------------------
+
+enum Platform {
+  instagram
+  facebook
+}
+
+enum ConnectionStatus {
+  connected
+  disconnected
+}
+
+model ConnectedAccount {
+  id             String           @id @default(cuid())
+  userId         String
+  platform       Platform
+  handle         String
+  // ID do usuário Instagram/Página usado nas chamadas Graph API.
+  igUserId       String?
+  // Token de acesso de longa duração, cifrado AES-256-GCM (nunca em texto puro).
+  accessTokenEnc String?
+  tokenExpiresAt DateTime?
+  status         ConnectionStatus @default(disconnected)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+  @@index([igUserId])
+}
+
+// ----------------------------------------------------------------------------
+// Automações
+// ----------------------------------------------------------------------------
+
+enum TriggerType {
+  reel_comment_specific
+  reel_comment_any
+  post_comment_specific
+  post_comment_any
+  story_reply
+  dm_new
+  dm_keyword
+}
+
+enum KeywordMatch {
+  any
+  specific
+}
+
+enum ActionType {
+  send_dm
+  send_link
+  send_file
+  save_contact
+  add_tag
+  reply_with_button
+}
+
+enum AutomationStatus {
+  active
+  inactive
+}
+
+model Automation {
+  id         String           @id @default(cuid())
+  userId     String
+  name       String
+  status     AutomationStatus @default(active)
+  executions Int              @default(0)
+  clicks     Int              @default(0)
+  lastRunAt  DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  user    User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trigger AutomationTrigger?
+  actions AutomationAction[]
+  messages Message[]
+
+  @@index([userId])
+}
+
+model AutomationTrigger {
+  id           String       @id @default(cuid())
+  automationId String       @unique
+  type         TriggerType
+  // Reel/post alvo quando o gatilho é "specific".
+  targetRef    String?
+  keywordMatch KeywordMatch @default(specific)
+  keywords     String[]
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+}
+
+model AutomationAction {
+  id           String     @id @default(cuid())
+  automationId String
+  type         ActionType
+  order        Int        @default(0)
+  // Configuração dependente do tipo (mensagem, link, fileId, tag, botão…).
+  config       Json       @default("{}")
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  @@index([automationId])
+}
+
+// ----------------------------------------------------------------------------
+// Contatos / Mensagens / Arquivos
+// ----------------------------------------------------------------------------
+
+model Contact {
+  id                 String   @id @default(cuid())
+  userId             String
+  name               String
+  username           String
+  origin             String
+  keywordUsed        String?
+  automationName     String?
+  firstInteractionAt DateTime @default(now())
+  lastInteractionAt  DateTime @default(now())
+  createdAt          DateTime @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactTags ContactTag[]
+  messages    Message[]
+
+  @@unique([userId, username])
+  @@index([userId])
+}
+
+model Tag {
+  id     String @id @default(cuid())
+  userId String
+  name   String
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contactTags ContactTag[]
+
+  @@unique([userId, name])
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+}
+
+enum MessageStatus {
+  pending
+  sent
+  delivered
+  failed
+}
+
+model Message {
+  id           String        @id @default(cuid())
+  userId       String
+  contactId    String?
+  automationId String?
+  body         String
+  status       MessageStatus @default(sent)
+  createdAt    DateTime      @default(now())
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact    Contact?    @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  automation Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+enum FileType {
+  pdf
+  image
+  video
+  document
+}
+
+model File {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  type      FileType
+  url       String
+  sizeLabel String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ----------------------------------------------------------------------------
+// Analytics
+// ----------------------------------------------------------------------------
+
+enum AnalyticsEventType {
+  comment_captured
+  message_sent
+  button_clicked
+  lead_created
+}
+
+model AnalyticsEvent {
+  id        String             @id @default(cuid())
+  userId    String
+  type      AnalyticsEventType
+  createdAt DateTime           @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}

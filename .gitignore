@@ -1,0 +1,16 @@
+# dependencies
+/node_modules
+
+# build
+/dist
+
+# prisma client gerado (recriado no build via `prisma generate`)
+/src/generated
+
+# env
+.env
+.env.*.local
+
+# logs / misc
+*.log
+.DS_Store
