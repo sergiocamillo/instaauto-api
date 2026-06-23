@@ -39,11 +39,22 @@ export interface MediaItem {
 export class GraphService {
   private readonly logger = new Logger(GraphService.name);
 
+  // Credenciais do app Meta (usadas no fluxo Facebook Login).
   private get appId() {
     return process.env.META_APP_ID ?? '';
   }
   private get appSecret() {
     return process.env.META_APP_SECRET ?? '';
+  }
+
+  // O fluxo Instagram Login exige o "Instagram App ID/Secret" próprios
+  // (Instagram → API setup with Instagram login → Business login settings),
+  // que são DIFERENTES do Meta App ID. Faz fallback para os do Meta se ausentes.
+  private get instagramAppId() {
+    return process.env.META_INSTAGRAM_APP_ID ?? this.appId;
+  }
+  private get instagramAppSecret() {
+    return process.env.META_INSTAGRAM_APP_SECRET ?? this.appSecret;
   }
   /** Redirect base; cada provider usa um sufixo distinto para diferenciar. */
   private redirectUri(provider: MetaProvider) {
@@ -71,7 +82,7 @@ export class GraphService {
       'instagram_business_manage_comments',
     ].join(',');
     const params = new URLSearchParams({
-      client_id: this.appId,
+      client_id: this.instagramAppId,
       redirect_uri: this.redirectUri('instagram'),
       scope,
       response_type: 'code',
@@ -114,8 +125,8 @@ export class GraphService {
     const tokenRes = await axios.post<{ access_token: string }>(
       'https://api.instagram.com/oauth/access_token',
       new URLSearchParams({
-        client_id: this.appId,
-        client_secret: this.appSecret,
+        client_id: this.instagramAppId,
+        client_secret: this.instagramAppSecret,
         grant_type: 'authorization_code',
         redirect_uri: this.redirectUri('instagram'),
         code,
@@ -129,7 +140,7 @@ export class GraphService {
     }>(`${IG_GRAPH}/access_token`, {
       params: {
         grant_type: 'ig_exchange_token',
-        client_secret: this.appSecret,
+        client_secret: this.instagramAppSecret,
         access_token: tokenRes.data.access_token,
       },
     });
