@@ -77,6 +77,9 @@ export class WebhookController {
     const secret = process.env.META_APP_SECRET;
     if (!secret) return; // app ainda não configurado: pula validação em dev
     if (!rawBody || !signature) {
+      this.logger.warn(
+        `Webhook sem assinatura verificável: rawBody=${rawBody ? rawBody.length : 0}, signature=${signature ? 'presente' : 'ausente'}`,
+      );
       throw new BadRequestException('Assinatura ausente');
     }
     const expected =

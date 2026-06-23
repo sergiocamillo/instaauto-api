@@ -4,8 +4,14 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { json, urlencoded } from 'express';
+import { json, urlencoded, type Request } from 'express';
 import { AppModule } from './app.module';
+
+type RawBodyRequest = Request & { rawBody?: Buffer };
+
+function saveRawBody(req: RawBodyRequest, _res: unknown, buf: Buffer) {
+  if (buf.length) req.rawBody = Buffer.from(buf);
+}
 
 async function bootstrap() {
   // rawBody habilita a verificação de assinatura do webhook da Meta.
@@ -15,8 +21,8 @@ async function bootstrap() {
   app.set('trust proxy', 1);
 
   app.use(helmet());
-  app.use(json({ limit: '1mb' }));
-  app.use(urlencoded({ extended: true, limit: '1mb' }));
+  app.use(json({ limit: '1mb', verify: saveRawBody }));
+  app.use(urlencoded({ extended: true, limit: '1mb', verify: saveRawBody }));
 
   app.setGlobalPrefix('api');
 
