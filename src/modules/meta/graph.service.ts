@@ -114,10 +114,22 @@ export class GraphService {
 
   /* ------------------------- Code exchange -------------------------- */
 
-  exchangeCode(provider: MetaProvider, code: string): Promise<MetaIdentity> {
-    return provider === 'facebook'
-      ? this.exchangeFacebook(code)
-      : this.exchangeInstagram(code);
+  async exchangeCode(
+    provider: MetaProvider,
+    code: string,
+  ): Promise<MetaIdentity> {
+    try {
+      return provider === 'facebook'
+        ? await this.exchangeFacebook(code)
+        : await this.exchangeInstagram(code);
+    } catch (err) {
+      // Expõe o corpo de erro da Meta (motivo real) na mensagem lançada.
+      if (axios.isAxiosError(err)) {
+        const body = JSON.stringify(err.response?.data ?? err.message);
+        throw new Error(`Meta API (${provider}): ${body}`);
+      }
+      throw err;
+    }
   }
 
   /** Instagram Login: short → long-lived token, depois identidade. */

@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import { Controller, Get, Logger, Param, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AccountsService } from './accounts.service';
@@ -17,6 +17,8 @@ function normalizeProvider(value?: string): MetaProvider {
 @ApiTags('accounts')
 @Controller('accounts')
 export class AccountsController {
+  private readonly logger = new Logger(AccountsController.name);
+
   constructor(private readonly service: AccountsService) {}
 
   @Get('status')
@@ -66,8 +68,13 @@ export class AccountsController {
         state,
       );
       return res.redirect(`${frontend}/configuracoes?connected=1`);
-    } catch {
-      return res.redirect(`${frontend}/configuracoes?error=1`);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      // Loga a causa real (visível nos logs do Railway) e repassa um resumo
+      // seguro ao frontend para exibição.
+      this.logger.error(`Falha no callback OAuth (${provider}): ${reason}`);
+      const summary = encodeURIComponent(reason.slice(0, 180));
+      return res.redirect(`${frontend}/configuracoes?error=1&reason=${summary}`);
     }
   }
 }
