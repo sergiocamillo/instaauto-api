@@ -4,6 +4,7 @@
   "packages": {
     "node": "22"
   },
+  "buildAptPackages": ["openssl"],
   "steps": {
     "install": {
       "commands": ["npm ci"]
@@ -14,6 +15,7 @@
     }
   },
   "deploy": {
+    "aptPackages": ["openssl"],
     "startCommand": "npm run release"
   }
 }
