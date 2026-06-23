@@ -16,6 +16,7 @@ class SimulateDto {
     | 'story_reply';
   @IsOptional() @IsString() senderUsername?: string;
   @IsOptional() @IsString() mediaRef?: string;
+  @IsOptional() @IsString() commentId?: string;
 }
 
 /**
@@ -65,6 +66,9 @@ export class SimulateController {
       text: dto.text,
       kind: dto.kind,
       mediaRef: dto.mediaRef,
+      commentId:
+        dto.commentId ??
+        (dto.kind === 'comment' ? `comment_${Date.now()}` : undefined),
     });
 
     return { processed: true };

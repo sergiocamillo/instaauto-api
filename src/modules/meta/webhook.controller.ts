@@ -94,9 +94,12 @@ export class WebhookController {
     for (const entry of body.entry ?? []) {
       const igUserId = entry.id;
 
-      // Comentários (campo "comments").
+      // Comentários (campos "comments" e "live_comments").
       for (const change of entry.changes ?? []) {
-        if (change.field === 'comments' && change.value) {
+        if (
+          (change.field === 'comments' || change.field === 'live_comments') &&
+          change.value
+        ) {
           events.push({
             igUserId,
             senderId: change.value.from?.id ?? '',
@@ -113,7 +116,7 @@ export class WebhookController {
       for (const msg of entry.messaging ?? []) {
         if (msg.message?.text) {
           events.push({
-            igUserId,
+            igUserId: msg.recipient?.id ?? igUserId,
             senderId: msg.sender?.id ?? '',
             text: msg.message.text,
             kind: msg.message.reply_to?.story ? 'story_reply' : 'message',
@@ -140,6 +143,7 @@ interface MetaWebhookBody {
     }>;
     messaging?: Array<{
       sender?: { id?: string };
+      recipient?: { id?: string };
       message?: { text?: string; reply_to?: { story?: unknown } };
     }>;
   }>;

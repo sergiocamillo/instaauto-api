@@ -29,6 +29,10 @@ export interface MediaItem {
   timestamp: string | null;
 }
 
+function graphBaseForToken(accessToken: string) {
+  return accessToken.startsWith('IG') ? IG_GRAPH : FB_GRAPH;
+}
+
 /**
  * Cliente da Meta Graph API. Todas as chamadas são server-side.
  *
@@ -360,14 +364,19 @@ export class GraphService {
   async sendDirectMessage(params: {
     igUserId: string;
     accessToken: string;
-    recipientId: string;
+    recipientId?: string;
+    commentId?: string;
     text: string;
   }): Promise<{ ok: boolean; error?: string }> {
     try {
+      const recipient = params.commentId
+        ? { comment_id: params.commentId }
+        : { id: params.recipientId };
+
       await axios.post(
-        `${FB_GRAPH}/${params.igUserId}/messages`,
+        `${graphBaseForToken(params.accessToken)}/${params.igUserId}/messages`,
         {
-          recipient: { id: params.recipientId },
+          recipient,
           message: { text: params.text },
         },
         { params: { access_token: params.accessToken } },
@@ -390,7 +399,7 @@ export class GraphService {
   }): Promise<{ ok: boolean; error?: string }> {
     try {
       await axios.post(
-        `${FB_GRAPH}/${params.commentId}/replies`,
+        `${graphBaseForToken(params.accessToken)}/${params.commentId}/replies`,
         { message: params.message },
         { params: { access_token: params.accessToken } },
       );

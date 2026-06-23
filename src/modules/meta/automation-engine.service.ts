@@ -55,9 +55,25 @@ export class AutomationEngineService {
 
   /** Ponto de entrada: processa um evento contra as automações do dono da conta. */
   async process(event: IncomingEvent): Promise<void> {
-    const account = await this.prisma.connectedAccount.findFirst({
+    this.logger.log(
+      `Processando evento ${event.kind} para ${event.igUserId}: "${event.text.slice(0, 80)}"`,
+    );
+
+    let account = await this.prisma.connectedAccount.findFirst({
       where: { igUserId: event.igUserId, status: 'connected' },
     });
+    if (!account) {
+      const connectedAccounts = await this.prisma.connectedAccount.findMany({
+        where: { status: 'connected' },
+        take: 2,
+      });
+      if (connectedAccounts.length === 1) {
+        account = connectedAccounts[0];
+        this.logger.warn(
+          `Conta ${event.igUserId} não encontrada; usando única conta conectada ${account.igUserId}`,
+        );
+      }
+    }
     if (!account) {
       this.logger.warn(`Conta ${event.igUserId} não conectada; ignorando`);
       return;
@@ -69,7 +85,15 @@ export class AutomationEngineService {
     })) as AutomationFull[];
 
     const matched = automations.filter((a) => this.matches(a, event));
-    if (!matched.length) return;
+    if (!matched.length) {
+      this.logger.log(
+        `Nenhuma automação casou com ${event.kind}; ativas=${automations.length}`,
+      );
+      return;
+    }
+    this.logger.log(
+      `${matched.length} automação(ões) casaram: ${matched.map((a) => a.name).join(', ')}`,
+    );
 
     const token = account.accessTokenEnc
       ? decryptSecret(account.accessTokenEnc, this.key)
@@ -201,7 +225,13 @@ export class AutomationEngineService {
               status: res.ok ? MessageStatus.delivered : MessageStatus.failed,
             },
           });
-          if (res.ok) await this.logEvent(userId, AnalyticsEventType.message_sent);
+          if (res.ok)
+            await this.logEvent(userId, AnalyticsEventType.message_sent);
+          if (!res.ok) {
+            this.logger.warn(
+              `Falha na resposta pública do comentário ${event.commentId}`,
+            );
+          }
           break;
         }
       }
@@ -227,13 +257,26 @@ export class AutomationEngineService {
     let status: MessageStatus = MessageStatus.sent;
 
     if (account.accessToken) {
-      const res = await this.graph.sendDirectMessage({
-        igUserId: account.igUserId,
-        accessToken: account.accessToken,
-        recipientId: event.senderId,
-        text,
-      });
-      status = res.ok ? MessageStatus.delivered : MessageStatus.failed;
+      if (!event.senderId && !event.commentId) {
+        status = MessageStatus.failed;
+        this.logger.warn(
+          `Evento ${event.kind} sem senderId/commentId; DM não enviada`,
+        );
+      } else {
+        const res = await this.graph.sendDirectMessage({
+          igUserId: account.igUserId,
+          accessToken: account.accessToken,
+          recipientId: event.kind === 'comment' ? undefined : event.senderId,
+          commentId: event.kind === 'comment' ? event.commentId : undefined,
+          text,
+        });
+        status = res.ok ? MessageStatus.delivered : MessageStatus.failed;
+        if (!res.ok) {
+          this.logger.warn(
+            `Falha ao enviar DM na automação ${automation.name}: ${res.error ?? 'sem detalhe'}`,
+          );
+        }
+      }
     } else {
       // Sem token (ex.: app Meta ainda não configurado): registra como pendente.
       status = MessageStatus.pending;
