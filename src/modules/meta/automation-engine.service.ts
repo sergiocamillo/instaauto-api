@@ -25,6 +25,7 @@ export interface IncomingEvent {
   text: string;
   kind: 'comment' | 'message' | 'story_reply';
   mediaRef?: string; // id/permalink da mídia para gatilhos "specific"
+  mediaProductType?: string;
   commentId?: string; // id do comentário, para responder publicamente
 }
 
@@ -39,6 +40,21 @@ type AutomationFull = Automation & {
 };
 
 type MatchResult = { ok: true } | { ok: false; reason: string };
+
+interface MessageStep {
+  message: string;
+  delayMinutes: number;
+  waitForReply: boolean;
+}
+
+interface PendingReplyStep {
+  userId: string;
+  automation: AutomationFull;
+  contactId: string;
+  igUserId: string;
+  accessToken: string | null;
+  text: string;
+}
 
 const COMMENT_TRIGGERS: TriggerType[] = [
   TriggerType.reel_comment_specific,
@@ -62,6 +78,7 @@ function preferredAccount(accounts: ConnectedAccount[]) {
 @Injectable()
 export class AutomationEngineService {
   private readonly logger = new Logger(AutomationEngineService.name);
+  private readonly pendingReplySteps = new Map<string, PendingReplyStep[]>();
   private readonly key = deriveKey(
     process.env.INTEGRATION_ENC_KEY ?? 'dev-integration-key',
   );
@@ -116,6 +133,12 @@ export class AutomationEngineService {
       account.igUserId!,
       token,
     );
+    if (event.kind === 'message' || event.kind === 'story_reply') {
+      await this.flushPendingReplySteps(account.userId, event, {
+        igUserId: account.igUserId!,
+        accessToken: token,
+      });
+    }
 
     const evaluations = automations.map((automation) => ({
       automation,
@@ -126,7 +149,7 @@ export class AutomationEngineService {
       .map((item) => item.automation);
     if (!matched.length) {
       this.logger.log(
-        `Nenhuma automação casou com ${event.kind}; ativas=${automations.length}`,
+        `Nenhuma automação casou com ${event.kind}; ativas=${automations.length}; media=${event.mediaRef ?? 'n/a'}; product=${event.mediaProductType ?? 'n/a'}`,
       );
       for (const item of evaluations) {
         if (!item.result.ok) {
@@ -196,7 +219,7 @@ export class AutomationEngineService {
       if (!targetMatchesEvent) {
         return {
           ok: false,
-          reason: `mídia não casa: event=${event.mediaRef}, target=${targetRef}`,
+          reason: `mídia não casa: event=${event.mediaRef}, product=${event.mediaProductType ?? 'n/a'}, target=${targetRef}`,
         };
       }
     }
@@ -285,7 +308,7 @@ export class AutomationEngineService {
     };
 
     for (const action of automation.actions) {
-      const cfg = (action.config ?? {}) as Record<string, string>;
+      const cfg = (action.config ?? {}) as Record<string, unknown>;
       this.logger.log(`Executando ação ${action.type} em "${automation.name}"`);
 
       switch (action.type) {
@@ -296,7 +319,7 @@ export class AutomationEngineService {
         case ActionType.add_tag:
           if (cfg.tag) {
             const id = await ensureContact();
-            await this.contacts.applyTags(userId, id, [cfg.tag]);
+            await this.contacts.applyTags(userId, id, [String(cfg.tag)]);
           }
           break;
 
@@ -304,9 +327,15 @@ export class AutomationEngineService {
         case ActionType.send_link:
         case ActionType.reply_with_button: {
           const id = await ensureContact();
-          const parts = [cfg.message, cfg.link].filter(Boolean);
-          const text = parts.join('\n') || 'Olá!';
-          await this.deliver(userId, automation, id, event, account, text);
+          await this.runMessageSteps({
+            userId,
+            automation,
+            contactId: id,
+            event,
+            account,
+            config: cfg,
+            fallback: 'Olá!',
+          });
           break;
         }
 
@@ -314,18 +343,18 @@ export class AutomationEngineService {
           const id = await ensureContact();
           const file = cfg.file_id
             ? await this.prisma.file.findFirst({
-                where: { id: cfg.file_id, userId },
+                where: { id: String(cfg.file_id), userId },
               })
             : null;
-          const text = [cfg.message, file?.url].filter(Boolean).join('\n');
-          await this.deliver(
+          await this.runMessageSteps({
             userId,
             automation,
-            id,
             event,
             account,
-            text || 'Segue seu material.',
-          );
+            contactId: id,
+            config: { ...cfg, link: file?.url ?? cfg.link },
+            fallback: 'Segue seu material.',
+          });
           break;
         }
 
@@ -334,8 +363,9 @@ export class AutomationEngineService {
           // de comentário, onde há commentId).
           if (!event.commentId || !account.accessToken) break;
           const id = await ensureContact();
-          const text =
-            cfg.comment_reply || cfg.message || 'Obrigado pelo comentário! 🙌';
+          const text = String(
+            cfg.comment_reply || cfg.message || 'Obrigado pelo comentário! 🙌',
+          );
           const res = await this.graph.replyToComment({
             commentId: event.commentId,
             accessToken: account.accessToken,
@@ -368,6 +398,156 @@ export class AutomationEngineService {
       data: { executions: { increment: 1 }, lastRunAt: new Date() },
     });
     await this.logEvent(userId, AnalyticsEventType.comment_captured);
+  }
+
+  private parseMessageSteps(config: Record<string, unknown>): MessageStep[] {
+    const rawSteps = Array.isArray(config.steps) ? config.steps : [];
+    const steps = rawSteps
+      .map((raw) => {
+        if (!raw || typeof raw !== 'object') return null;
+        const item = raw as Record<string, unknown>;
+        const message = String(item.message ?? '').trim();
+        if (!message) return null;
+        return {
+          message,
+          delayMinutes: Math.max(
+            0,
+            Number(item.delay_minutes ?? item.delayMinutes ?? 0) || 0,
+          ),
+          waitForReply: Boolean(item.wait_for_reply ?? item.waitForReply),
+        };
+      })
+      .filter((step): step is MessageStep => Boolean(step));
+
+    if (steps.length > 0) return steps;
+
+    const fallbackMessage = String(config.message ?? '').trim();
+    return fallbackMessage
+      ? [{ message: fallbackMessage, delayMinutes: 0, waitForReply: false }]
+      : [];
+  }
+
+  private async runMessageSteps(params: {
+    userId: string;
+    automation: AutomationFull;
+    contactId: string;
+    event: IncomingEvent;
+    account: { igUserId: string; accessToken: string | null };
+    config: Record<string, unknown>;
+    fallback: string;
+  }) {
+    const steps = this.parseMessageSteps(params.config);
+    const link = String(params.config.link ?? '').trim();
+    const effectiveSteps =
+      steps.length > 0
+        ? steps
+        : [{ message: params.fallback, delayMinutes: 0, waitForReply: false }];
+
+    for (const [index, step] of effectiveSteps.entries()) {
+      const text = [step.message, index === 0 ? link : '']
+        .filter(Boolean)
+        .join('\n');
+
+      if (step.waitForReply) {
+        this.queuePendingReplyStep({
+          userId: params.userId,
+          automation: params.automation,
+          contactId: params.contactId,
+          igUserId: params.account.igUserId,
+          accessToken: params.account.accessToken,
+          senderId: params.event.senderId,
+          text,
+        });
+        continue;
+      }
+
+      if (step.delayMinutes > 0) {
+        this.scheduleDelayedStep({
+          ...params,
+          text,
+          delayMinutes: step.delayMinutes,
+        });
+        continue;
+      }
+
+      await this.deliver(
+        params.userId,
+        params.automation,
+        params.contactId,
+        params.event,
+        params.account,
+        text,
+      );
+    }
+  }
+
+  private pendingKey(userId: string, senderId: string) {
+    return `${userId}:${senderId}`;
+  }
+
+  private queuePendingReplyStep(
+    params: PendingReplyStep & { senderId: string },
+  ) {
+    const key = this.pendingKey(params.userId, params.senderId);
+    const current = this.pendingReplySteps.get(key) ?? [];
+    this.pendingReplySteps.set(key, [...current, params]);
+    this.logger.log(
+      `Etapa aguardando próxima resposta em "${params.automation.name}" para ${params.senderId}`,
+    );
+  }
+
+  private async flushPendingReplySteps(
+    userId: string,
+    event: IncomingEvent,
+    account: { igUserId: string; accessToken: string | null },
+  ) {
+    if (!event.senderId) return;
+    const key = this.pendingKey(userId, event.senderId);
+    const pending = this.pendingReplySteps.get(key);
+    if (!pending?.length) return;
+
+    this.pendingReplySteps.delete(key);
+    this.logger.log(
+      `Disparando ${pending.length} etapa(s) após resposta de ${event.senderId}`,
+    );
+    for (const step of pending) {
+      await this.deliver(
+        step.userId,
+        step.automation,
+        step.contactId,
+        event,
+        {
+          igUserId: account.igUserId,
+          accessToken: account.accessToken,
+        },
+        step.text,
+      );
+    }
+  }
+
+  private scheduleDelayedStep(params: {
+    userId: string;
+    automation: AutomationFull;
+    contactId: string;
+    event: IncomingEvent;
+    account: { igUserId: string; accessToken: string | null };
+    text: string;
+    delayMinutes: number;
+  }) {
+    const delayMs = params.delayMinutes * 60_000;
+    this.logger.log(
+      `Agendando ação em "${params.automation.name}" para ${params.delayMinutes} minuto(s)`,
+    );
+    setTimeout(() => {
+      void this.deliver(
+        params.userId,
+        params.automation,
+        params.contactId,
+        params.event,
+        params.account,
+        params.text,
+      );
+    }, delayMs);
   }
 
   /** Envia a DM (se houver token) e registra a mensagem. */

@@ -121,6 +121,7 @@ export class WebhookController {
             text: change.value.text ?? '',
             kind: 'comment',
             mediaRef: change.value.media?.id ?? change.value.media?.permalink,
+            mediaProductType: change.value.media?.media_product_type,
             commentId: change.value.id,
           });
         }
@@ -152,7 +153,11 @@ interface MetaWebhookBody {
         id?: string;
         text?: string;
         from?: { id?: string; username?: string };
-        media?: { id?: string; permalink?: string };
+        media?: {
+          id?: string;
+          permalink?: string;
+          media_product_type?: string;
+        };
       };
     }>;
     messaging?: Array<{
