@@ -39,11 +39,11 @@ model User {
 }
 
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
   revokedAt DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -130,9 +130,9 @@ model Automation {
   createdAt  DateTime         @default(now())
   updatedAt  DateTime         @updatedAt
 
-  user    User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trigger AutomationTrigger?
-  actions AutomationAction[]
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trigger  AutomationTrigger?
+  actions  AutomationAction[]
   messages Message[]
 
   @@index([userId])
@@ -220,6 +220,7 @@ model Message {
   userId       String
   contactId    String?
   automationId String?
+  sourceKey    String?
   body         String
   status       MessageStatus @default(sent)
   createdAt    DateTime      @default(now())
@@ -228,6 +229,7 @@ model Message {
   contact    Contact?    @relation(fields: [contactId], references: [id], onDelete: SetNull)
   automation Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
 
+  @@unique([sourceKey])
   @@index([userId])
 }
 

@@ -120,6 +120,7 @@ export class WebhookController {
             senderUsername: change.value.from?.username,
             text: change.value.text ?? '',
             kind: 'comment',
+            eventId: change.value.id,
             mediaRef: change.value.media?.id ?? change.value.media?.permalink,
             mediaProductType: change.value.media?.media_product_type,
             commentId: change.value.id,
@@ -129,12 +130,17 @@ export class WebhookController {
 
       // Mensagens diretas e respostas de Story (campo "messaging").
       for (const msg of entry.messaging ?? []) {
-        if (msg.message?.text) {
+        const message = msg.message;
+        const quickReplyPayload = message?.quick_reply?.payload;
+        const text = message?.text ?? quickReplyPayload;
+        if (text) {
           events.push({
             igUserId: msg.recipient?.id ?? igUserId,
             senderId: msg.sender?.id ?? '',
-            text: msg.message.text,
-            kind: msg.message.reply_to?.story ? 'story_reply' : 'message',
+            text,
+            kind: message?.reply_to?.story ? 'story_reply' : 'message',
+            eventId: message?.mid,
+            quickReplyPayload,
           });
         }
       }
@@ -163,7 +169,12 @@ interface MetaWebhookBody {
     messaging?: Array<{
       sender?: { id?: string };
       recipient?: { id?: string };
-      message?: { text?: string; reply_to?: { story?: unknown } };
+      message?: {
+        mid?: string;
+        text?: string;
+        quick_reply?: { payload?: string };
+        reply_to?: { story?: unknown };
+      };
     }>;
   }>;
 }

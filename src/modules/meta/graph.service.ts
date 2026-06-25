@@ -29,6 +29,22 @@ export interface MediaItem {
   timestamp: string | null;
 }
 
+export interface QuickReply {
+  title: string;
+  payload: string;
+}
+
+export interface InstagramUserProfile {
+  id: string;
+  username: string | null;
+  name: string | null;
+  profilePic: string | null;
+  isUserFollowBusiness: boolean | null;
+  isBusinessFollowUser: boolean | null;
+  isVerifiedUser: boolean | null;
+  followerCount: number | null;
+}
+
 interface DebugTokenResponse {
   data: {
     app_id?: string;
@@ -430,6 +446,45 @@ export class GraphService {
     }));
   }
 
+  async getUserProfile(params: {
+    userId: string;
+    accessToken: string;
+  }): Promise<InstagramUserProfile | null> {
+    try {
+      const res = await axios.get<{
+        id?: string;
+        username?: string;
+        name?: string;
+        profile_pic?: string;
+        is_user_follow_business?: boolean;
+        is_business_follow_user?: boolean;
+        is_verified_user?: boolean;
+        follower_count?: number;
+      }>(`${graphBaseForToken(params.accessToken)}/${params.userId}`, {
+        params: {
+          fields:
+            'id,username,name,profile_pic,is_user_follow_business,is_business_follow_user,is_verified_user,follower_count',
+          access_token: params.accessToken,
+        },
+      });
+
+      return {
+        id: res.data.id ?? params.userId,
+        username: res.data.username ?? null,
+        name: res.data.name ?? null,
+        profilePic: res.data.profile_pic ?? null,
+        isUserFollowBusiness: res.data.is_user_follow_business ?? null,
+        isBusinessFollowUser: res.data.is_business_follow_user ?? null,
+        isVerifiedUser: res.data.is_verified_user ?? null,
+        followerCount: res.data.follower_count ?? null,
+      };
+    } catch (err) {
+      const message = metaErrorMessage(err);
+      this.logger.warn(`Falha ao ler perfil do usuário ${params.userId}: ${message}`);
+      return null;
+    }
+  }
+
   /* --------------------------- Messaging ---------------------------- */
 
   async sendDirectMessage(params: {
@@ -438,17 +493,29 @@ export class GraphService {
     recipientId?: string;
     commentId?: string;
     text: string;
+    quickReplies?: QuickReply[];
   }): Promise<{ ok: boolean; error?: string }> {
     try {
       const recipient = params.commentId
         ? { comment_id: params.commentId }
         : { id: params.recipientId };
+      const quickReplies = (params.quickReplies ?? [])
+        .map((reply) => ({
+          content_type: 'text',
+          title: reply.title.slice(0, 20),
+          payload: reply.payload.slice(0, 1000),
+        }))
+        .filter((reply) => reply.title && reply.payload);
+      const message = {
+        text: params.text,
+        ...(quickReplies.length ? { quick_replies: quickReplies } : {}),
+      };
 
       await axios.post(
         `${graphBaseForToken(params.accessToken)}/${params.igUserId}/messages`,
         {
           recipient,
-          message: { text: params.text },
+          message,
         },
         { params: { access_token: params.accessToken } },
       );

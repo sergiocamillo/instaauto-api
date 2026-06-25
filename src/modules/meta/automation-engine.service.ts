@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { GraphService } from './graph.service';
+import type { QuickReply } from './graph.service';
 import { ContactsService } from '../contacts/contacts.service';
 import { decryptSecret, deriveKey } from '../../common/crypto/secrets.crypto';
 import {
@@ -15,6 +16,7 @@ import type {
   Automation,
   AutomationAction,
   ConnectedAccount,
+  Prisma,
 } from '@generated/prisma';
 
 /** Evento normalizado vindo do webhook (comentário ou DM). */
@@ -24,6 +26,8 @@ export interface IncomingEvent {
   senderUsername?: string;
   text: string;
   kind: 'comment' | 'message' | 'story_reply';
+  eventId?: string;
+  quickReplyPayload?: string;
   mediaRef?: string; // id/permalink da mídia para gatilhos "specific"
   mediaProductType?: string;
   commentId?: string; // id do comentário, para responder publicamente
@@ -54,6 +58,19 @@ interface PendingReplyStep {
   igUserId: string;
   accessToken: string | null;
   text: string;
+  sourceKey: string;
+}
+
+interface PendingFollowDelivery {
+  userId: string;
+  automation: AutomationFull;
+  actionId: string;
+  contactId: string;
+  event: IncomingEvent;
+  account: { igUserId: string; accessToken: string | null };
+  config: Record<string, unknown>;
+  fallback: string;
+  sourceKey: string;
 }
 
 const COMMENT_TRIGGERS: TriggerType[] = [
@@ -75,10 +92,34 @@ function preferredAccount(accounts: ConnectedAccount[]) {
   );
 }
 
+function sourceKey(parts: Array<string | number | null | undefined>) {
+  return parts
+    .map((part) =>
+      String(part ?? 'none')
+        .replace(/\s+/g, ' ')
+        .slice(0, 160),
+    )
+    .join(':');
+}
+
+function stableIndex(seed: string, length: number) {
+  if (length <= 1) return 0;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  }
+  return hash % length;
+}
+
 @Injectable()
 export class AutomationEngineService {
   private readonly logger = new Logger(AutomationEngineService.name);
   private readonly pendingReplySteps = new Map<string, PendingReplyStep[]>();
+  private readonly pendingFollowDeliveries = new Map<
+    string,
+    PendingFollowDelivery[]
+  >();
+  private readonly scheduledSourceKeys = new Set<string>();
   private readonly key = deriveKey(
     process.env.INTEGRATION_ENC_KEY ?? 'dev-integration-key',
   );
@@ -134,10 +175,34 @@ export class AutomationEngineService {
       token,
     );
     if (event.kind === 'message' || event.kind === 'story_reply') {
-      await this.flushPendingReplySteps(account.userId, event, {
-        igUserId: account.igUserId!,
-        accessToken: token,
-      });
+      const handledFollowCheck = await this.flushPendingFollowDeliveries(
+        account.userId,
+        event,
+        {
+          igUserId: account.igUserId!,
+          accessToken: token,
+        },
+      );
+      const handledPendingReply = await this.flushPendingReplySteps(
+        account.userId,
+        event,
+        {
+          igUserId: account.igUserId!,
+          accessToken: token,
+        },
+      );
+      if (
+        handledPendingReply &&
+        event.quickReplyPayload?.startsWith('BUTTON:')
+      ) {
+        return;
+      }
+      if (
+        handledFollowCheck &&
+        event.quickReplyPayload?.startsWith('FOLLOW_CHECK:')
+      ) {
+        return;
+      }
     }
 
     const evaluations = automations.map((automation) => ({
@@ -240,6 +305,47 @@ export class AutomationEngineService {
     return { ok: true };
   }
 
+  private matchedKeyword(automation: AutomationFull, event: IncomingEvent) {
+    const keywords = automation.trigger?.keywords ?? [];
+    const haystack = event.text.toUpperCase();
+    return keywords.find((k) => haystack.includes(k.toUpperCase())) ?? '';
+  }
+
+  private renderTemplate(
+    template: string,
+    event: IncomingEvent,
+    automation: AutomationFull,
+  ) {
+    const username = event.senderUsername ?? '';
+    const firstName = username.split(/[._\-\s]/)[0] || username;
+    const vars: Record<string, string> = {
+      nome: username || 'Contato',
+      name: username || 'Contato',
+      primeiro_nome: firstName || 'Contato',
+      first_name: firstName || 'Contato',
+      username,
+      arroba: username ? `@${username}` : '',
+      comentario: event.text,
+      comment: event.text,
+      mensagem: event.text,
+      message: event.text,
+      keyword: this.matchedKeyword(automation, event),
+      media_id: event.mediaRef ?? '',
+    };
+
+    return template.replace(/\{\{\s*([\w_]+)\s*\}\}/g, (_match, key) => {
+      return vars[String(key).toLowerCase()] ?? '';
+    });
+  }
+
+  private pickVariant(values: unknown, fallback: string, seed: string) {
+    const variants = Array.isArray(values)
+      ? values.map((v) => String(v).trim()).filter(Boolean)
+      : [];
+    if (!variants.length) return fallback;
+    return variants[stableIndex(seed, variants.length)];
+  }
+
   private async repairLegacyMediaTargets(
     automations: AutomationFull[],
     event: IncomingEvent,
@@ -324,17 +430,31 @@ export class AutomationEngineService {
           break;
 
         case ActionType.send_dm:
-        case ActionType.send_link:
-        case ActionType.reply_with_button: {
+        case ActionType.send_link: {
           const id = await ensureContact();
-          await this.runMessageSteps({
+          await this.runGatedMessageSteps({
             userId,
             automation,
+            actionId: action.id,
             contactId: id,
             event,
             account,
             config: cfg,
             fallback: 'Olá!',
+          });
+          break;
+        }
+
+        case ActionType.reply_with_button: {
+          const id = await ensureContact();
+          await this.runButtonAction({
+            userId,
+            automation,
+            actionId: action.id,
+            contactId: id,
+            event,
+            account,
+            config: cfg,
           });
           break;
         }
@@ -346,9 +466,10 @@ export class AutomationEngineService {
                 where: { id: String(cfg.file_id), userId },
               })
             : null;
-          await this.runMessageSteps({
+          await this.runGatedMessageSteps({
             userId,
             automation,
+            actionId: action.id,
             event,
             account,
             contactId: id,
@@ -363,19 +484,49 @@ export class AutomationEngineService {
           // de comentário, onde há commentId).
           if (!event.commentId || !account.accessToken) break;
           const id = await ensureContact();
-          const text = String(
-            cfg.comment_reply || cfg.message || 'Obrigado pelo comentário! 🙌',
+          const pickedReply = this.pickVariant(
+            cfg.comment_replies,
+            String(
+              cfg.comment_reply ||
+                cfg.message ||
+                'Obrigado pelo comentário! 🙌',
+            ),
+            sourceKey([
+              event.eventId ?? event.commentId,
+              automation.id,
+              action.id,
+            ]),
           );
+          const text = this.renderTemplate(pickedReply, event, automation);
+          const replySourceKey = sourceKey([
+            'reply_comment',
+            event.eventId ?? event.commentId,
+            automation.id,
+            action.id,
+          ]);
+          if (await this.messageExists(replySourceKey)) {
+            this.logger.log(
+              `Resposta pública duplicada ignorada: ${replySourceKey}`,
+            );
+            break;
+          }
+          const messageId = await this.reserveMessage({
+            userId,
+            contactId: id,
+            automationId: automation.id,
+            sourceKey: replySourceKey,
+            body: `[resposta ao comentário] ${text}`,
+            status: MessageStatus.pending,
+          });
+          if (!messageId) break;
           const res = await this.graph.replyToComment({
             commentId: event.commentId,
             accessToken: account.accessToken,
             message: text,
           });
-          await this.prisma.message.create({
+          await this.prisma.message.update({
+            where: { id: messageId },
             data: {
-              userId,
-              contactId: id,
-              automationId: automation.id,
               body: `[resposta ao comentário] ${text}`,
               status: res.ok ? MessageStatus.delivered : MessageStatus.failed,
             },
@@ -430,6 +581,7 @@ export class AutomationEngineService {
   private async runMessageSteps(params: {
     userId: string;
     automation: AutomationFull;
+    actionId: string;
     contactId: string;
     event: IncomingEvent;
     account: { igUserId: string; accessToken: string | null };
@@ -447,6 +599,21 @@ export class AutomationEngineService {
       const text = [step.message, index === 0 ? link : '']
         .filter(Boolean)
         .join('\n');
+      const renderedText = this.renderTemplate(
+        text,
+        params.event,
+        params.automation,
+      );
+      const stepSourceKey = sourceKey([
+        'dm',
+        params.event.eventId ??
+          params.event.commentId ??
+          `${params.event.kind}:${params.event.senderId}:${params.event.text}`,
+        params.automation.id,
+        params.actionId,
+        index,
+        renderedText,
+      ]);
 
       if (step.waitForReply) {
         this.queuePendingReplyStep({
@@ -456,7 +623,8 @@ export class AutomationEngineService {
           igUserId: params.account.igUserId,
           accessToken: params.account.accessToken,
           senderId: params.event.senderId,
-          text,
+          text: renderedText,
+          sourceKey: stepSourceKey,
         });
         continue;
       }
@@ -464,7 +632,8 @@ export class AutomationEngineService {
       if (step.delayMinutes > 0) {
         this.scheduleDelayedStep({
           ...params,
-          text,
+          text: renderedText,
+          sourceKey: stepSourceKey,
           delayMinutes: step.delayMinutes,
         });
         continue;
@@ -476,9 +645,238 @@ export class AutomationEngineService {
         params.contactId,
         params.event,
         params.account,
-        text,
+        renderedText,
+        stepSourceKey,
       );
     }
+  }
+
+  private async runGatedMessageSteps(params: {
+    userId: string;
+    automation: AutomationFull;
+    actionId: string;
+    contactId: string;
+    event: IncomingEvent;
+    account: { igUserId: string; accessToken: string | null };
+    config: Record<string, unknown>;
+    fallback: string;
+  }) {
+    if (
+      !(await this.ensureFollowerBeforeDelivery({
+        ...params,
+        sourceKey: sourceKey([
+          'follow_gate',
+          params.event.eventId ??
+            params.event.commentId ??
+            `${params.event.kind}:${params.event.senderId}:${params.event.text}`,
+          params.automation.id,
+          params.actionId,
+        ]),
+      }))
+    ) {
+      return;
+    }
+
+    await this.runMessageSteps(params);
+  }
+
+  private async runButtonAction(params: {
+    userId: string;
+    automation: AutomationFull;
+    actionId: string;
+    contactId: string;
+    event: IncomingEvent;
+    account: { igUserId: string; accessToken: string | null };
+    config: Record<string, unknown>;
+  }) {
+    const steps = this.parseMessageSteps(params.config);
+    const firstStep = steps[0]?.message || String(params.config.message ?? '');
+    const buttonText = this.renderTemplate(
+      firstStep || 'Clique no botão abaixo para continuar.',
+      params.event,
+      params.automation,
+    );
+    const buttonLabel = String(params.config.button_label || 'Continuar')
+      .trim()
+      .slice(0, 20);
+    const link = String(params.config.link ?? '').trim();
+    const followup = [
+      String(params.config.button_followup ?? '').trim(),
+      link,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const seed =
+      params.event.eventId ??
+      params.event.commentId ??
+      `${params.event.kind}:${params.event.senderId}:${params.event.text}`;
+    const buttonSourceKey = sourceKey([
+      'button_prompt',
+      seed,
+      params.automation.id,
+      params.actionId,
+    ]);
+
+    await this.deliver(
+      params.userId,
+      params.automation,
+      params.contactId,
+      params.event,
+      params.account,
+      buttonText,
+      buttonSourceKey,
+      [
+        {
+          title: buttonLabel || 'Continuar',
+          payload: sourceKey(['BUTTON', params.automation.id, params.actionId]),
+        },
+      ],
+    );
+
+    if (!followup) return;
+    this.queuePendingReplyStep({
+      userId: params.userId,
+      automation: params.automation,
+      contactId: params.contactId,
+      igUserId: params.account.igUserId,
+      accessToken: params.account.accessToken,
+      senderId: params.event.senderId,
+      text: this.renderTemplate(followup, params.event, params.automation),
+      sourceKey: sourceKey([
+        'button_followup',
+        seed,
+        params.automation.id,
+        params.actionId,
+        followup,
+      ]),
+    });
+  }
+
+  private requiresFollow(config: Record<string, unknown>) {
+    return Boolean(config.require_follow ?? config.requireFollow);
+  }
+
+  private async ensureFollowerBeforeDelivery(params: PendingFollowDelivery) {
+    if (!this.requiresFollow(params.config)) return true;
+    const status = await this.getFollowStatus(params);
+    if (status === 'following') return true;
+
+    this.queuePendingFollowDelivery(params);
+    await this.sendFollowPrompt(params, status);
+    return false;
+  }
+
+  private async getFollowStatus(params: {
+    event: IncomingEvent;
+    account: { accessToken: string | null };
+  }): Promise<'following' | 'not_following' | 'unknown'> {
+    if (!params.account.accessToken || !params.event.senderId) return 'unknown';
+    const profile = await this.graph.getUserProfile({
+      userId: params.event.senderId,
+      accessToken: params.account.accessToken,
+    });
+    if (profile?.isUserFollowBusiness === true) return 'following';
+    if (profile?.isUserFollowBusiness === false) return 'not_following';
+    return 'unknown';
+  }
+
+  private queuePendingFollowDelivery(params: PendingFollowDelivery) {
+    const key = this.pendingKey(params.userId, params.event.senderId);
+    const current = this.pendingFollowDeliveries.get(key) ?? [];
+    if (current.some((item) => item.sourceKey === params.sourceKey)) {
+      return;
+    }
+    this.pendingFollowDeliveries.set(key, [...current, params]);
+    this.logger.log(
+      `Entrega aguardando follow em "${params.automation.name}" para ${params.event.senderId}`,
+    );
+  }
+
+  private async sendFollowPrompt(
+    params: PendingFollowDelivery,
+    status: 'not_following' | 'unknown',
+  ) {
+    const fallback =
+      status === 'unknown'
+        ? 'Para liberar o conteúdo, siga o perfil e toque no botão abaixo.'
+        : 'Antes de enviar o conteúdo, siga o perfil e toque no botão abaixo.';
+    const text = this.renderTemplate(
+      String(params.config.follow_prompt || fallback),
+      params.event,
+      params.automation,
+    );
+    const buttonLabel = String(
+      params.config.follow_button_label || 'Já estou seguindo',
+    )
+      .trim()
+      .slice(0, 20);
+    await this.deliver(
+      params.userId,
+      params.automation,
+      params.contactId,
+      params.event,
+      params.account,
+      text,
+      sourceKey([
+        params.sourceKey,
+        'prompt',
+        status,
+        params.event.eventId ?? params.event.text,
+      ]),
+      [
+        {
+          title: buttonLabel || 'Já estou seguindo',
+          payload: sourceKey([
+            'FOLLOW_CHECK',
+            params.automation.id,
+            params.actionId,
+          ]),
+        },
+      ],
+    );
+  }
+
+  private async flushPendingFollowDeliveries(
+    userId: string,
+    event: IncomingEvent,
+    account: { igUserId: string; accessToken: string | null },
+  ) {
+    if (!event.senderId) return false;
+    const key = this.pendingKey(userId, event.senderId);
+    const pending = this.pendingFollowDeliveries.get(key);
+    if (!pending?.length) return false;
+
+    this.pendingFollowDeliveries.delete(key);
+    this.logger.log(
+      `Revalidando follow para ${pending.length} entrega(s) de ${event.senderId}`,
+    );
+
+    const stillPending: PendingFollowDelivery[] = [];
+    for (const delivery of pending) {
+      const nextDelivery = {
+        ...delivery,
+        event,
+        account: {
+          igUserId: account.igUserId,
+          accessToken: account.accessToken,
+        },
+      };
+      const status = await this.getFollowStatus(nextDelivery);
+      if (status === 'following') {
+        await this.runMessageSteps({
+          ...nextDelivery,
+          config: { ...nextDelivery.config, require_follow: false },
+        });
+      } else {
+        stillPending.push(delivery);
+        await this.sendFollowPrompt(nextDelivery, status);
+      }
+    }
+
+    if (stillPending.length) {
+      this.pendingFollowDeliveries.set(key, stillPending);
+    }
+    return true;
   }
 
   private pendingKey(userId: string, senderId: string) {
@@ -490,6 +888,10 @@ export class AutomationEngineService {
   ) {
     const key = this.pendingKey(params.userId, params.senderId);
     const current = this.pendingReplySteps.get(key) ?? [];
+    if (current.some((step) => step.sourceKey === params.sourceKey)) {
+      this.logger.log(`Etapa pendente duplicada ignorada: ${params.sourceKey}`);
+      return;
+    }
     this.pendingReplySteps.set(key, [...current, params]);
     this.logger.log(
       `Etapa aguardando próxima resposta em "${params.automation.name}" para ${params.senderId}`,
@@ -501,10 +903,10 @@ export class AutomationEngineService {
     event: IncomingEvent,
     account: { igUserId: string; accessToken: string | null },
   ) {
-    if (!event.senderId) return;
+    if (!event.senderId) return false;
     const key = this.pendingKey(userId, event.senderId);
     const pending = this.pendingReplySteps.get(key);
-    if (!pending?.length) return;
+    if (!pending?.length) return false;
 
     this.pendingReplySteps.delete(key);
     this.logger.log(
@@ -521,8 +923,10 @@ export class AutomationEngineService {
           accessToken: account.accessToken,
         },
         step.text,
+        step.sourceKey,
       );
     }
+    return true;
   }
 
   private scheduleDelayedStep(params: {
@@ -532,8 +936,14 @@ export class AutomationEngineService {
     event: IncomingEvent;
     account: { igUserId: string; accessToken: string | null };
     text: string;
+    sourceKey: string;
     delayMinutes: number;
   }) {
+    if (this.scheduledSourceKeys.has(params.sourceKey)) {
+      this.logger.log(`Agendamento duplicado ignorado: ${params.sourceKey}`);
+      return;
+    }
+    this.scheduledSourceKeys.add(params.sourceKey);
     const delayMs = params.delayMinutes * 60_000;
     this.logger.log(
       `Agendando ação em "${params.automation.name}" para ${params.delayMinutes} minuto(s)`,
@@ -546,7 +956,9 @@ export class AutomationEngineService {
         params.event,
         params.account,
         params.text,
+        params.sourceKey,
       );
+      this.scheduledSourceKeys.delete(params.sourceKey);
     }, delayMs);
   }
 
@@ -558,7 +970,24 @@ export class AutomationEngineService {
     event: IncomingEvent,
     account: { igUserId: string; accessToken: string | null },
     text: string,
+    sourceKey: string,
+    quickReplies: QuickReply[] = [],
   ) {
+    if (await this.messageExists(sourceKey)) {
+      this.logger.log(`Mensagem duplicada ignorada: ${sourceKey}`);
+      return;
+    }
+
+    const messageId = await this.reserveMessage({
+      userId,
+      contactId,
+      automationId: automation.id,
+      sourceKey,
+      body: text,
+      status: MessageStatus.pending,
+    });
+    if (!messageId) return;
+
     let status: MessageStatus = MessageStatus.sent;
     let error: string | undefined;
 
@@ -576,6 +1005,7 @@ export class AutomationEngineService {
           recipientId: event.kind === 'comment' ? undefined : event.senderId,
           commentId: event.kind === 'comment' ? event.commentId : undefined,
           text,
+          quickReplies,
         });
         status = res.ok ? MessageStatus.delivered : MessageStatus.failed;
         error = res.error;
@@ -590,11 +1020,9 @@ export class AutomationEngineService {
       status = MessageStatus.pending;
     }
 
-    await this.prisma.message.create({
+    await this.prisma.message.update({
+      where: { id: messageId },
       data: {
-        userId,
-        contactId,
-        automationId: automation.id,
         body:
           status === MessageStatus.failed && error
             ? `${text}\n\n[erro Meta] ${error}`
@@ -604,6 +1032,31 @@ export class AutomationEngineService {
     });
     if (status !== MessageStatus.failed) {
       await this.logEvent(userId, AnalyticsEventType.message_sent);
+    }
+  }
+
+  private async messageExists(sourceKey: string) {
+    const count = await this.prisma.message.count({ where: { sourceKey } });
+    return count > 0;
+  }
+
+  private async reserveMessage(data: Prisma.MessageUncheckedCreateInput) {
+    try {
+      const message = await this.prisma.message.create({ data });
+      return message.id;
+    } catch (err) {
+      if (
+        err &&
+        typeof err === 'object' &&
+        'code' in err &&
+        err.code === 'P2002'
+      ) {
+        this.logger.log(
+          `Mensagem duplicada bloqueada pelo banco: ${data.sourceKey}`,
+        );
+        return null;
+      }
+      throw err;
     }
   }
 
