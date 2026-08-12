@@ -12,6 +12,8 @@ export type MetaProvider = 'instagram' | 'facebook';
 export interface MetaIdentity {
   /** ID do Instagram usado nas chamadas (IG user id ou IG business account id). */
   igUserId: string;
+  /** ID enviado pela Meta no webhook (entry.id). No IG Login é o user_id. */
+  webhookUserId?: string;
   username: string;
   /** Token efetivamente usado para chamadas em nome da conta. */
   accessToken: string;
@@ -250,13 +252,18 @@ export class GraphService {
     });
     const accessToken = longRes.data.access_token;
 
-    const meRes = await axios.get<{ id: string; username: string }>(
-      `${IG_GRAPH}/me`,
-      { params: { fields: 'id,username', access_token: accessToken } },
-    );
+    const meRes = await axios.get<{
+      id: string;
+      user_id?: string;
+      username: string;
+    }>(`${IG_GRAPH}/me`, {
+      params: { fields: 'id,user_id,username', access_token: accessToken },
+    });
 
     return {
       igUserId: meRes.data.id,
+      // O webhook do IG manda o user_id (IGSID) no entry.id, não o id.
+      webhookUserId: meRes.data.user_id ?? meRes.data.id,
       username: meRes.data.username,
       accessToken,
       expiresInSec: longRes.data.expires_in ?? 60 * 24 * 3600,
@@ -375,6 +382,8 @@ export class GraphService {
 
     return {
       igUserId,
+      // No fluxo Facebook o webhook usa o mesmo IG business account id.
+      webhookUserId: igUserId,
       username: igRes.data.username,
       // Page token é de longa duração quando derivado de long-lived user token.
       accessToken: pageToken,

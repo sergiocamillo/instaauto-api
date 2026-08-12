@@ -102,6 +102,7 @@ export class AccountsService {
     const data = {
       handle: `@${identity.username}`,
       igUserId: identity.igUserId,
+      webhookUserId: identity.webhookUserId ?? identity.igUserId,
       accessTokenEnc: encryptSecret(identity.accessToken, this.key),
       tokenExpiresAt,
       status: ConnectionStatus.connected,

@@ -70,8 +70,11 @@ model ConnectedAccount {
   userId         String
   platform       Platform
   handle         String
-  // ID do usuário Instagram/Página usado nas chamadas Graph API.
+  // ID do usuário Instagram/Página usado nas chamadas Graph API (o "id" do /me).
   igUserId       String?
+  // ID que a Meta envia no webhook (entry.id) — no Instagram Login é o "user_id"
+  // do /me, que DIFERE do igUserId. Usado para casar o evento com a conta.
+  webhookUserId  String?
   // Token de acesso de longa duração, cifrado AES-256-GCM (nunca em texto puro).
   accessTokenEnc String?
   tokenExpiresAt DateTime?
@@ -83,6 +86,7 @@ model ConnectedAccount {
 
   @@unique([userId, platform])
   @@index([igUserId])
+  @@index([webhookUserId])
 }
 
 // ----------------------------------------------------------------------------

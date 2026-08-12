@@ -136,24 +136,19 @@ export class AutomationEngineService {
       `Processando evento ${event.kind} para ${event.igUserId}: "${event.text.slice(0, 80)}"`,
     );
 
+    // O webhook do Instagram Login manda entry.id = user_id (webhookUserId),
+    // que DIFERE do igUserId salvo. Casa por qualquer um dos dois.
     const matchingAccounts = await this.prisma.connectedAccount.findMany({
-      where: { igUserId: event.igUserId, status: 'connected' },
+      where: {
+        status: 'connected',
+        OR: [{ igUserId: event.igUserId }, { webhookUserId: event.igUserId }],
+      },
     });
-    let account = preferredAccount(matchingAccounts);
+    const account = preferredAccount(matchingAccounts);
     if (!account) {
-      const connectedAccounts = await this.prisma.connectedAccount.findMany({
-        where: { status: 'connected' },
-        take: 2,
-      });
-      if (connectedAccounts.length === 1) {
-        account = connectedAccounts[0];
-        this.logger.warn(
-          `Conta ${event.igUserId} não encontrada; usando única conta conectada ${account.igUserId}`,
-        );
-      }
-    }
-    if (!account) {
-      this.logger.warn(`Conta ${event.igUserId} não conectada; ignorando`);
+      this.logger.warn(
+        `Conta ${event.igUserId} não encontrada (igUserId/webhookUserId); ignorando`,
+      );
       return;
     }
 
