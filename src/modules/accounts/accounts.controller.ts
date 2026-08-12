@@ -46,6 +46,12 @@ export class AccountsController {
     return this.service.listMedia(user.id);
   }
 
+  @Post('resubscribe')
+  @ApiBearerAuth()
+  resubscribe(@CurrentUser() user: AuthUser) {
+    return this.service.resubscribe(user.id);
+  }
+
   @Get('debug-token')
   @ApiBearerAuth()
   debugToken(@CurrentUser() user: AuthUser) {

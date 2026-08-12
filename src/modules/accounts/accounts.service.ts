@@ -126,10 +126,38 @@ export class AccountsService {
       },
     });
 
+    // Inscreve a conta nos webhooks (comments + messages). Sem isso a Meta não
+    // entrega eventos. Não bloqueia a conexão se falhar — apenas loga.
+    if (identity.igUserId) {
+      await this.graph.subscribeToWebhooks(
+        identity.igUserId,
+        identity.accessToken,
+      );
+    }
+
     this.logger.log(
       `Conta @${identity.username} conectada via ${provider} (user ${userId})`,
     );
     return { connected: true, handle: `@${identity.username}` };
+  }
+
+  /**
+   * Re-inscreve todas as contas conectadas do usuário nos webhooks
+   * (comments + messages). Útil para consertar contas conectadas antes de o
+   * subscribe automático existir, sem precisar reconectar.
+   */
+  async resubscribe(userId: string) {
+    const accounts = await this.prisma.connectedAccount.findMany({
+      where: { userId, status: ConnectionStatus.connected },
+    });
+    const results: Array<{ handle: string; ok: boolean; error?: string }> = [];
+    for (const account of accounts) {
+      if (!account.igUserId || !account.accessTokenEnc) continue;
+      const token = decryptSecret(account.accessTokenEnc, this.key);
+      const res = await this.graph.subscribeToWebhooks(account.igUserId, token);
+      results.push({ handle: account.handle, ...res });
+    }
+    return { accounts: results };
   }
 
   /** Desconecta: apaga o token cifrado e marca como desconectado. */

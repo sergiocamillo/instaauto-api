@@ -700,10 +700,7 @@ export class AutomationEngineService {
       .trim()
       .slice(0, 20);
     const link = String(params.config.link ?? '').trim();
-    const followup = [
-      String(params.config.button_followup ?? '').trim(),
-      link,
-    ]
+    const followup = [String(params.config.button_followup ?? '').trim(), link]
       .filter(Boolean)
       .join('\n');
     const seed =

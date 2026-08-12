@@ -480,7 +480,9 @@ export class GraphService {
       };
     } catch (err) {
       const message = metaErrorMessage(err);
-      this.logger.warn(`Falha ao ler perfil do usuário ${params.userId}: ${message}`);
+      this.logger.warn(
+        `Falha ao ler perfil do usuário ${params.userId}: ${message}`,
+      );
       return null;
     }
   }
@@ -543,6 +545,37 @@ export class GraphService {
     } catch (err) {
       const message = metaErrorMessage(err);
       this.logger.error(`Falha ao responder comentário: ${message}`);
+      return { ok: false, error: message };
+    }
+  }
+
+  /**
+   * Inscreve a conta nos webhooks de comentários e mensagens
+   * (POST /{ig-user-id}/subscribed_apps). Sem isso a Meta não entrega eventos
+   * para a conta — cada conta precisa ser inscrita individualmente ao conectar.
+   */
+  async subscribeToWebhooks(
+    igUserId: string,
+    accessToken: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await axios.post(
+        `${graphBaseForToken(accessToken)}/${igUserId}/subscribed_apps`,
+        null,
+        {
+          params: {
+            subscribed_fields: 'comments,messages',
+            access_token: accessToken,
+          },
+        },
+      );
+      this.logger.log(`Webhooks inscritos para IG ${igUserId}`);
+      return { ok: true };
+    } catch (err) {
+      const message = metaErrorMessage(err);
+      this.logger.error(
+        `Falha ao inscrever webhooks (${igUserId}): ${message}`,
+      );
       return { ok: false, error: message };
     }
   }
