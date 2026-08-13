@@ -152,6 +152,24 @@ export class AutomationEngineService {
       return;
     }
 
+    // ANTI-LOOP: ignora eventos cujo autor é a PRÓPRIA conta conectada. Sem
+    // isso, uma ação reply_comment cria um comentário da própria conta, que
+    // dispara a automação de novo → loop infinito. Compara o remetente com os
+    // IDs e o handle da conta dona.
+    const ownHandle = account.handle?.replace(/^@/, '').toLowerCase();
+    const senderHandle = event.senderUsername?.replace(/^@/, '').toLowerCase();
+    const isSelf =
+      (!!event.senderId &&
+        (event.senderId === account.igUserId ||
+          event.senderId === account.webhookUserId)) ||
+      (!!senderHandle && !!ownHandle && senderHandle === ownHandle);
+    if (isSelf) {
+      this.logger.warn(
+        `Evento é da própria conta (${event.senderUsername ?? event.senderId}); ignorando p/ evitar loop`,
+      );
+      return;
+    }
+
     const automations = (await this.prisma.automation.findMany({
       where: { userId: account.userId, status: 'active' },
       include: { trigger: true, actions: { orderBy: { order: 'asc' } } },
