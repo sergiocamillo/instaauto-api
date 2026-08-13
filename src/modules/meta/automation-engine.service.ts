@@ -12,11 +12,11 @@ import {
   Platform,
   TriggerType,
 } from '@generated/prisma/enums';
+import { Prisma } from '@generated/prisma';
 import type {
   Automation,
   AutomationAction,
   ConnectedAccount,
-  Prisma,
 } from '@generated/prisma';
 
 /** Evento normalizado vindo do webhook (comentário ou DM). */
@@ -136,6 +136,13 @@ export class AutomationEngineService {
       `Processando evento ${event.kind} para ${event.igUserId}: "${event.text.slice(0, 80)}"`,
     );
 
+    // DEDUPLICAÇÃO: cada evento é processado UMA vez. Se a Meta reenviar o
+    // mesmo webhook, a chave já existe e ignoramos (evita rajada/duplicação).
+    if (!(await this.claimEvent(event))) {
+      this.logger.warn(`Evento já processado; ignorando (dedup)`);
+      return;
+    }
+
     // O webhook do Instagram Login manda entry.id = user_id (webhookUserId),
     // que DIFERE do igUserId salvo. Casa por qualquer um dos dois.
     const matchingAccounts = await this.prisma.connectedAccount.findMany({
@@ -252,6 +259,41 @@ export class AutomationEngineService {
         igUserId: account.igUserId!,
         accessToken: token,
       });
+    }
+  }
+
+  /**
+   * Reivindica o evento para processamento (deduplicação). Retorna true se é a
+   * primeira vez; false se já foi processado (chave única viola → P2002).
+   * Sem commentId/eventId (não dá pra deduplicar), deixa passar.
+   */
+  private async claimEvent(event: IncomingEvent): Promise<boolean> {
+    const eventKey =
+      event.commentId ??
+      event.eventId ??
+      (event.kind === 'message'
+        ? // DM não tem id estável aqui; usa sender+texto p/ evitar reenvio duplo.
+          `dm:${event.igUserId}:${event.senderId}:${event.text.slice(0, 80)}`
+        : null);
+    if (!eventKey) return true; // sem chave, não deduplica
+
+    try {
+      await this.prisma.processedEvent.create({
+        data: { eventKey, igUserId: event.igUserId },
+      });
+      return true;
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        return false; // já processado
+      }
+      // Erro inesperado: não bloqueia o processamento.
+      this.logger.error(
+        `claimEvent falhou: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return true;
     }
   }
 
